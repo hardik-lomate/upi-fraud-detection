@@ -1,0 +1,28 @@
+{
+  "version": "2.0.0",
+  "trained_at": "2026-04-03T21:02:43.414853",
+  "train_size": 80000,
+  "test_size": 20000,
+  "fraud_rate": 0.03,
+  "ensemble_auc": 1.0,
+  "feature_columns": [
+    "amount",
+    "hour",
+    "day_of_week",
+    "is_night",
+    "is_weekend",
+    "txn_type_encoded",
+    "sender_txn_count_24h",
+    "sender_avg_amount",
+    "sender_std_amount",
+    "amount_deviation",
+    "sender_unique_receivers_24h",
+    "is_new_device",
+    "is_new_receiver"
+  ],
+  "weights": {
+    "xgboost": 0.45,
+    "lightgbm": 0.35,
+    "isolation_forest": 0.2
+  }
+}

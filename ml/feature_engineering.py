@@ -1,6 +1,16 @@
+"""
+Feature Engineering — Training-time feature extraction.
+Imports all definitions from feature_contract.py (single source of truth).
+"""
+
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelEncoder
+import sys
+import os
+
+# Add project root to path so we can import feature_contract
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from feature_contract import FEATURE_COLUMNS, TXN_TYPE_MAP, NIGHT_HOUR_CUTOFF, WEEKEND_DAY_CUTOFF
 
 
 def engineer_features(df):
@@ -8,18 +18,17 @@ def engineer_features(df):
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values("timestamp").reset_index(drop=True)
 
-    # --- Time features ---
+    # --- Time features (using contract constants) ---
     df["hour"] = df["timestamp"].dt.hour
     df["day_of_week"] = df["timestamp"].dt.dayofweek
-    df["is_night"] = df["hour"].apply(lambda h: 1 if h <= 5 else 0)
-    df["is_weekend"] = df["day_of_week"].apply(lambda d: 1 if d >= 5 else 0)
+    df["is_night"] = df["hour"].apply(lambda h: 1 if h <= NIGHT_HOUR_CUTOFF else 0)
+    df["is_weekend"] = df["day_of_week"].apply(lambda d: 1 if d >= WEEKEND_DAY_CUTOFF else 0)
 
-    # --- Encode transaction type ---
-    le = LabelEncoder()
-    df["txn_type_encoded"] = le.fit_transform(df["transaction_type"])
+    # --- Encode transaction type (using contract map, NOT LabelEncoder) ---
+    df["txn_type_encoded"] = df["transaction_type"].map(TXN_TYPE_MAP).fillna(0).astype(int)
 
-    # --- Behavioral features (rolling window approximations) ---
-    # Sender transaction counts (cumulative)
+    # --- Behavioral features ---
+    # Sender transaction counts (cumulative, approximates 24h in batch context)
     sender_counts = df.groupby("sender_upi").cumcount()
     df["sender_txn_count_24h"] = sender_counts
 
@@ -36,7 +45,7 @@ def engineer_features(df):
         0,
     )
 
-    # Unique receivers per sender (computed via loop for compatibility)
+    # Unique receivers per sender
     sender_unique_recv = {}
     unique_recv_counts = []
     for _, row in df.iterrows():
@@ -83,31 +92,16 @@ def engineer_features(df):
     return df
 
 
-FEATURE_COLS = [
-    "amount",
-    "hour",
-    "day_of_week",
-    "is_night",
-    "is_weekend",
-    "txn_type_encoded",
-    "sender_txn_count_24h",
-    "sender_avg_amount",
-    "sender_std_amount",
-    "amount_deviation",
-    "sender_unique_receivers_24h",
-    "is_new_device",
-    "is_new_receiver",
-]
-
-
 if __name__ == "__main__":
     df = pd.read_csv("ml/data/raw/transactions.csv")
     print(f"Loaded {len(df)} transactions")
-    print("Engineering features... (this may take a few minutes)")
+    print("Engineering features...")
 
     df = engineer_features(df)
 
-    df_out = df[FEATURE_COLS + ["is_fraud"]]
+    # Use FEATURE_COLUMNS from contract — guarantees consistency
+    df_out = df[FEATURE_COLUMNS + ["is_fraud"]]
     df_out.to_csv("ml/data/processed/features.csv", index=False)
-    print(f"Saved {len(df_out)} rows with {len(FEATURE_COLS)} features")
+    print(f"Saved {len(df_out)} rows with {len(FEATURE_COLUMNS)} features")
+    print(f"Feature order: {FEATURE_COLUMNS}")
     print(df_out.describe())
