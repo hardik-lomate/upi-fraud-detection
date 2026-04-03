@@ -1,51 +1,38 @@
 """
-Feature Extraction — Serving-time feature extraction (single transaction).
-Imports all definitions from feature_contract.py (single source of truth).
+Feature Extraction — Serving-time (single transaction).
+Uses feature_contract.py for definitions and history_store.py for persistence.
 """
 
 from datetime import datetime, timedelta
-import sys
-import os
+import sys, os
+import logging
 
-# Add project root to path so we can import feature_contract
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 from feature_contract import FEATURE_COLUMNS, TXN_TYPE_MAP, NIGHT_HOUR_CUTOFF, WEEKEND_DAY_CUTOFF
+from .history_store import get_sender_history, save_sender_history
 
-# In-memory store for behavioral features.
-# On startup, this is hydrated from the DB (see main.py).
-sender_history: dict = {}
+logger = logging.getLogger(__name__)
 
+WINDOW_1H = timedelta(hours=1)
 WINDOW_24H = timedelta(hours=24)
+WINDOW_7D = timedelta(days=7)
 
 
-def _get_or_create_history(sender: str) -> dict:
-    if sender not in sender_history:
-        sender_history[sender] = {
-            "transactions": [],  # list of (timestamp, amount, device, receiver)
-            "devices": set(),
-            "receivers": set(),
-        }
-    return sender_history[sender]
-
-
-def _filter_last_24h(transactions: list, now: datetime) -> list:
-    cutoff = now - WINDOW_24H
+def _filter_window(transactions: list, now: datetime, window: timedelta) -> list:
+    cutoff = now - window
     return [(ts, amt, dev, recv) for ts, amt, dev, recv in transactions if ts >= cutoff]
 
 
 def extract_features(txn: dict) -> dict:
     """
     Extract features from a raw transaction dict.
-    Returns a dict keyed by FEATURE_COLUMNS names — guarantees
-    exact same feature names as training.
+    Returns a dict keyed by FEATURE_COLUMNS names.
     """
     ts = datetime.fromisoformat(txn.get("timestamp", datetime.now().isoformat()))
     hour = ts.hour
     day_of_week = ts.weekday()
     is_night = 1 if hour <= NIGHT_HOUR_CUTOFF else 0
     is_weekend = 1 if day_of_week >= WEEKEND_DAY_CUTOFF else 0
-
-    # Use same TXN_TYPE_MAP as training
     txn_type_encoded = TXN_TYPE_MAP.get(txn["transaction_type"], 0)
 
     sender = txn["sender_upi"]
@@ -53,20 +40,21 @@ def extract_features(txn: dict) -> dict:
     device = txn["sender_device_id"]
     receiver = txn["receiver_upi"]
 
-    hist = _get_or_create_history(sender)
+    hist = get_sender_history(sender)
 
-    # Filter to real 24h window
-    recent_txns = _filter_last_24h(hist["transactions"], ts)
+    # Real time-windowed counts
+    txns_24h = _filter_window(hist["transactions"], ts, WINDOW_24H)
+    txns_1h = _filter_window(hist["transactions"], ts, WINDOW_1H)
 
-    sender_txn_count_24h = len(recent_txns)
-    recent_amounts = [amt for _, amt, _, _ in recent_txns]
+    sender_txn_count_24h = len(txns_24h)
+    amounts_24h = [amt for _, amt, _, _ in txns_24h]
 
-    if recent_amounts:
-        sender_avg_amount = sum(recent_amounts) / len(recent_amounts)
+    if amounts_24h:
+        sender_avg_amount = sum(amounts_24h) / len(amounts_24h)
+        n = len(amounts_24h)
         sender_std_amount = (
-            (sum((a - sender_avg_amount) ** 2 for a in recent_amounts) / len(recent_amounts)) ** 0.5
-            if len(recent_amounts) > 1
-            else 0.0
+            (sum((a - sender_avg_amount) ** 2 for a in amounts_24h) / n) ** 0.5
+            if n > 1 else 0.0
         )
     else:
         sender_avg_amount = amount
@@ -74,12 +62,11 @@ def extract_features(txn: dict) -> dict:
 
     amount_deviation = (
         (amount - sender_avg_amount) / sender_std_amount
-        if sender_std_amount > 0
-        else 0.0
+        if sender_std_amount > 0 else 0.0
     )
 
-    recent_receivers = {recv for _, _, _, recv in recent_txns}
-    sender_unique_receivers_24h = len(recent_receivers)
+    receivers_24h = {recv for _, _, _, recv in txns_24h}
+    sender_unique_receivers_24h = len(receivers_24h)
 
     is_new_device = 0 if device in hist["devices"] else 1
     is_new_receiver = 0 if receiver in hist["receivers"] else 1
@@ -89,13 +76,16 @@ def extract_features(txn: dict) -> dict:
     hist["devices"].add(device)
     hist["receivers"].add(receiver)
 
-    # Prune old transactions
-    cutoff_7d = ts - timedelta(days=7)
+    # Prune to 7 days
+    cutoff_7d = ts - WINDOW_7D
     hist["transactions"] = [
         (t, a, d, r) for t, a, d, r in hist["transactions"] if t >= cutoff_7d
     ]
 
-    # Build feature dict — keys MUST match FEATURE_COLUMNS exactly
+    # Persist to Redis/memory
+    save_sender_history(sender, hist)
+
+    # Build feature dict — must match FEATURE_COLUMNS exactly
     features = {
         "amount": amount,
         "hour": hour,
@@ -112,9 +102,12 @@ def extract_features(txn: dict) -> dict:
         "is_new_receiver": is_new_receiver,
     }
 
-    # Sanity check: every key in contract must be present
+    # Contract check
     missing = set(FEATURE_COLUMNS) - set(features.keys())
     if missing:
-        raise ValueError(f"Feature contract violation! Missing features: {missing}")
+        raise ValueError(f"Feature contract violation! Missing: {missing}")
+
+    # Expose 1h count for rules engine (not a model feature)
+    features["_sender_txn_count_1h"] = len(txns_1h)
 
     return features

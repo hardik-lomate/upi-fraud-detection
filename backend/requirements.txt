@@ -13,3 +13,4 @@ python-jose[cryptography]==3.3.0
 slowapi==0.1.9
 passlib[bcrypt]==1.7.4
 requests==2.31.0
+redis==5.0.1

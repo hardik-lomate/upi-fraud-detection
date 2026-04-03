@@ -159,11 +159,12 @@ def step_explain(ctx: PipelineContext, explain_fn, format_fn) -> PipelineContext
 def step_device_check(ctx: PipelineContext, check_fn, update_fn, sender_history) -> PipelineContext:
     """Step 6: Device fingerprinting."""
     try:
-        anomalies = check_fn(ctx.raw_txn, sender_history)
+        # sender_history may be None if managed by history_store internally
+        history = sender_history or {}
+        anomalies = check_fn(ctx.raw_txn, history)
         ctx.device_anomalies = anomalies
-        update_fn(ctx.raw_txn, sender_history)
+        update_fn(ctx.raw_txn, history)
 
-        # Upgrade decision if impossible travel
         if any(a["type"] == "IMPOSSIBLE_TRAVEL" for a in anomalies):
             if ctx.decision == "ALLOW":
                 ctx.decision, ctx.risk_level = "FLAG", "MEDIUM"
