@@ -1,10 +1,9 @@
 {
-  "version": "2.0.0",
-  "trained_at": "2026-04-03T21:02:43.414853",
-  "train_size": 80000,
-  "test_size": 20000,
-  "fraud_rate": 0.03,
-  "ensemble_auc": 1.0,
+  "model_version": "2.0.0",
+  "trained_at": "2026-04-03T21:50:22.926272",
+  "training_data_rows": 80000,
+  "test_data_rows": 20000,
+  "training_fraud_rate": 0.03,
   "feature_columns": [
     "amount",
     "hour",
@@ -20,9 +19,72 @@
     "is_new_device",
     "is_new_receiver"
   ],
-  "weights": {
+  "ensemble_weights": {
     "xgboost": 0.45,
     "lightgbm": 0.35,
     "isolation_forest": 0.2
+  },
+  "thresholds": {
+    "threshold_flag": 0.9278,
+    "threshold_block": 0.8833,
+    "flag_precision": 1.0,
+    "flag_recall": 0.9,
+    "block_precision": 1.0,
+    "block_recall": 1.0,
+    "block_f05": 1.0
+  },
+  "per_model_metrics": {
+    "xgboost": {
+      "roc_auc": 1.0,
+      "pr_auc": 1.0,
+      "cv_roc_auc_mean": 1.0,
+      "cv_roc_auc_std": 0.0
+    },
+    "lightgbm": {
+      "roc_auc": 1.0,
+      "pr_auc": 1.0,
+      "cv_roc_auc_mean": 1.0,
+      "cv_roc_auc_std": 0.0
+    },
+    "isolation_forest": {
+      "roc_auc": 0.9977
+    }
+  },
+  "ensemble_metrics": {
+    "roc_auc": 1.0,
+    "pr_auc": 1.0,
+    "f1_at_block": 1.0,
+    "precision_at_block": 1.0,
+    "recall_at_block": 1.0
+  },
+  "top_features": [
+    {
+      "name": "is_new_device",
+      "importance": 0.7833
+    },
+    {
+      "name": "hour",
+      "importance": 0.0796
+    },
+    {
+      "name": "is_night",
+      "importance": 0.0473
+    },
+    {
+      "name": "sender_unique_receivers_24h",
+      "importance": 0.0306
+    },
+    {
+      "name": "sender_std_amount",
+      "importance": 0.0245
+    }
+  ],
+  "iso_calibration": {
+    "min": -0.13562247374432923,
+    "max": 0.21721414335382389
+  },
+  "class_distribution": {
+    "fraud": 2400,
+    "legit": 77600
   }
 }

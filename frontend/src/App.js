@@ -3,6 +3,7 @@ import TransactionForm from './components/TransactionForm';
 import ResultDisplay from './components/ResultDisplay';
 import TransactionHistory from './components/TransactionHistory';
 import MonitoringPanel from './components/MonitoringPanel';
+import LiveFeed from './components/LiveFeed';
 import axios from 'axios';
 import './App.css';
 
@@ -15,6 +16,16 @@ function App() {
   const [error, setError] = useState(null);
   const [backendOnline, setBackendOnline] = useState(true);
   const [activeTab, setActiveTab] = useState('predict');
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = localStorage.getItem('darkMode');
+    if (saved !== null) return JSON.parse(saved);
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true;
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+    localStorage.setItem('darkMode', JSON.stringify(darkMode));
+  }, [darkMode]);
 
   const fetchHistory = useCallback(async () => {
     try {
@@ -58,12 +69,21 @@ function App() {
 
   const handleRetry = () => { setError(null); setBackendOnline(true); fetchHistory(); };
 
+  const tabs = [
+    { id: 'predict', label: '🔍 Predict' },
+    { id: 'live', label: '📡 Live Feed' },
+    { id: 'monitor', label: '📊 Monitor' },
+  ];
+
   return (
     <div className="app">
       <header className="app-header">
         <div className="header-content">
-          <h1>🛡️ UPI Fraud Detection System</h1>
-          <p className="subtitle">v2.0 — Ensemble ML · SHAP · Graph Analysis · Real-time Monitoring</p>
+          <h1>🛡️ UPI Fraud Detection</h1>
+          <p className="subtitle">v2.0 — Ensemble ML · SHAP · Graph Analysis · Real-time</p>
+          <button className="theme-toggle" onClick={() => setDarkMode(!darkMode)} title="Toggle theme">
+            {darkMode ? '☀️' : '🌙'}
+          </button>
           {!backendOnline && (
             <div className="status-bar offline">
               ⚠️ Backend offline — <button onClick={handleRetry} className="retry-link">Retry</button>
@@ -71,10 +91,10 @@ function App() {
           )}
         </div>
         <nav className="tab-nav">
-          {['predict', 'monitor'].map(tab => (
-            <button key={tab} className={`tab-btn ${activeTab === tab ? 'active' : ''}`}
-              onClick={() => setActiveTab(tab)}>
-              {tab === 'predict' ? '🔍 Predict' : '📊 Monitor'}
+          {tabs.map(tab => (
+            <button key={tab.id} className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}>
+              {tab.label}
             </button>
           ))}
         </nav>
@@ -97,6 +117,10 @@ function App() {
               <TransactionHistory history={history} />
             </div>
           </>
+        ) : activeTab === 'live' ? (
+          <div className="full-panel">
+            <LiveFeed />
+          </div>
         ) : (
           <div className="full-panel">
             <MonitoringPanel apiUrl={API_URL} />

@@ -1,6 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
+import FraudGauge from './FraudGauge';
+import axios from 'axios';
+
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 function ResultDisplay({ result }) {
+  const [feedbackSent, setFeedbackSent] = useState(false);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+
   const getColor = (decision) => {
     switch (decision) {
       case 'ALLOW': return '#22c55e';
@@ -10,43 +17,53 @@ function ResultDisplay({ result }) {
     }
   };
 
-  const getEmoji = (decision) => {
-    switch (decision) {
-      case 'ALLOW': return '✅';
-      case 'FLAG': return '⚠️';
-      case 'BLOCK': return '🚫';
-      default: return '❓';
+  const submitFeedback = async (verdict) => {
+    setFeedbackLoading(true);
+    try {
+      await axios.post(`${API_URL}/feedback`, {
+        transaction_id: result.transaction_id,
+        analyst_verdict: verdict,
+      });
+      setFeedbackSent(true);
+    } catch (err) {
+      console.error('Feedback failed:', err);
     }
+    setFeedbackLoading(false);
   };
+
+  const rb = result.risk_breakdown;
 
   return (
     <div className="card result-card" style={{ borderLeft: `4px solid ${getColor(result.decision)}` }}>
-      <h2>{getEmoji(result.decision)} Prediction Result</h2>
+      {/* Fraud Gauge — hero element */}
+      <FraudGauge score={result.fraud_score} decision={result.decision} />
 
-      <div className="result-grid">
-        <div className="result-item">
-          <span className="label">Transaction ID</span>
-          <span className="value">{result.transaction_id}</span>
+      {/* Risk Breakdown */}
+      {rb && (
+        <div className="section risk-breakdown-grid">
+          <h3>📊 Risk Breakdown</h3>
+          <div className="risk-bars">
+            {[
+              { label: 'Behavioral', value: rb.behavioral, color: '#8b5cf6' },
+              { label: 'Temporal', value: rb.temporal, color: '#06b6d4' },
+              { label: 'Network', value: rb.network, color: '#f97316' },
+              { label: 'Device', value: rb.device, color: '#ec4899' },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="risk-bar-item">
+                <div className="risk-bar-header">
+                  <span>{label}</span>
+                  <span style={{ fontWeight: 'bold' }}>{value}%</span>
+                </div>
+                <div className="risk-bar-bg">
+                  <div className="risk-bar-fill" style={{ width: `${value}%`, backgroundColor: color }} />
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="result-item">
-          <span className="label">Ensemble Score</span>
-          <span className="value score" style={{ color: getColor(result.decision) }}>
-            {(result.fraud_score * 100).toFixed(1)}%
-          </span>
-        </div>
-        <div className="result-item">
-          <span className="label">Decision</span>
-          <span className="value decision-badge" style={{ backgroundColor: getColor(result.decision) }}>
-            {result.decision}
-          </span>
-        </div>
-        <div className="result-item">
-          <span className="label">Risk Level</span>
-          <span className="value">{result.risk_level}</span>
-        </div>
-      </div>
+      )}
 
-      {/* Individual Model Scores */}
+      {/* Model Scores */}
       {result.individual_scores && Object.keys(result.individual_scores).length > 0 && (
         <div className="section">
           <h3>🤖 Model Scores</h3>
@@ -68,7 +85,7 @@ function ResultDisplay({ result }) {
       )}
 
       {/* SHAP Reasons */}
-      {result.reasons && result.reasons.length > 0 && (
+      {result.reasons?.length > 0 && (
         <div className="section">
           <h3>💡 Why This Decision</h3>
           <ul className="reasons-list">
@@ -79,8 +96,8 @@ function ResultDisplay({ result }) {
         </div>
       )}
 
-      {/* Rules Triggered */}
-      {result.rules_triggered && result.rules_triggered.length > 0 && (
+      {/* Rules */}
+      {result.rules_triggered?.length > 0 && (
         <div className="section">
           <h3>📋 Rules Triggered</h3>
           {result.rules_triggered.map((rule, i) => (
@@ -94,7 +111,7 @@ function ResultDisplay({ result }) {
       )}
 
       {/* Device Anomalies */}
-      {result.device_anomalies && result.device_anomalies.length > 0 && (
+      {result.device_anomalies?.length > 0 && (
         <div className="section">
           <h3>📱 Device Anomalies</h3>
           {result.device_anomalies.map((a, i) => (
@@ -113,9 +130,8 @@ function ResultDisplay({ result }) {
           <div className="graph-grid">
             <div><span className="label">Out-degree</span><span className="value">{result.graph_info.out_degree}</span></div>
             <div><span className="label">In-degree</span><span className="value">{result.graph_info.in_degree}</span></div>
-            <div><span className="label">PageRank</span><span className="value">{result.graph_info.pagerank.toFixed(6)}</span></div>
+            <div><span className="label">PageRank</span><span className="value">{result.graph_info.pagerank?.toFixed(6)}</span></div>
             <div><span className="label">Cycles</span><span className="value">{result.graph_info.cycle_count}</span></div>
-            {result.graph_info.is_hub && <div className="badge-alert">🔴 Hub Account</div>}
             {result.graph_info.is_mule_suspect && <div className="badge-alert">🔴 Mule Suspect</div>}
           </div>
         </div>
@@ -123,6 +139,23 @@ function ResultDisplay({ result }) {
 
       <p className="result-message">{result.message}</p>
       <p className="model-version">Model v{result.model_version} · {result.models_used?.join(' + ')}</p>
+
+      {/* Feedback */}
+      <div className="section feedback-section">
+        <h3>🏷️ Submit Feedback</h3>
+        {feedbackSent ? (
+          <p style={{ color: '#22c55e' }}>✅ Feedback submitted — thank you!</p>
+        ) : (
+          <div className="feedback-buttons">
+            <button onClick={() => submitFeedback('confirmed_fraud')} disabled={feedbackLoading}
+              className="feedback-btn feedback-fraud">🚨 Confirmed Fraud</button>
+            <button onClick={() => submitFeedback('false_positive')} disabled={feedbackLoading}
+              className="feedback-btn feedback-fp">⚠️ False Positive</button>
+            <button onClick={() => submitFeedback('true_negative')} disabled={feedbackLoading}
+              className="feedback-btn feedback-legit">✅ Legitimate</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

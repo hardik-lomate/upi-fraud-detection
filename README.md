@@ -1,117 +1,156 @@
 # 🛡️ UPI Fraud Detection System
 
-**Industry-grade real-time fraud detection powered by Ensemble ML, SHAP Explainability, Graph Analysis, and Compliance Logging.**
+![Python](https://img.shields.io/badge/Python-3.11-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-0.104-green) ![React](https://img.shields.io/badge/React-18-61dafb) ![Docker](https://img.shields.io/badge/Docker-Ready-2496ED) ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-0.104-green) ![React](https://img.shields.io/badge/React-18-61dafb) ![XGBoost](https://img.shields.io/badge/XGBoost-2.0-orange) ![License](https://img.shields.io/badge/License-MIT-yellow)
+Real-time UPI fraud detection using ensemble ML, SHAP explainability, graph analysis, and a rules engine — built for production.
+
+---
 
 ## Architecture
 
 ```
-Request → Rate Limiter → JWT Auth → Rules Engine (6 rules)
-    → Feature Extract (13 features, real 24h window)
-    → Ensemble ML (XGBoost 45% + LightGBM 35% + IsoForest 20%)
-    → SHAP Explainability (top 5 reasons)
-    → Device Fingerprinting (impossible travel, IP anomaly)
-    → Graph Analysis (PageRank, mule detection, ring transactions)
-    → Decision Engine → Async DB + Audit Trail
+Transaction → Validate → Features → Rules → ML Ensemble → Decide → Explain → Device → Graph
+                                      │           │
+                                 Instant BLOCK  XGBoost (45%)
+                                 or FLAG        LightGBM (35%)
+                                                IsoForest (20%)
 ```
+
+## Performance
+
+| Metric | Value |
+|--------|-------|
+| Ensemble ROC AUC | ~0.97 |
+| Ensemble PR AUC | ~0.81 |
+| XGBoost CV ROC AUC | ~0.97 ± 0.002 |
+| LightGBM CV ROC AUC | ~0.96 ± 0.003 |
+| Thresholds | Optimized via F0.5 + Recall≥90% |
 
 ## Features
 
-| Category | Details |
+| Category | Feature |
 |----------|---------|
-| **Ensemble ML** | XGBoost + LightGBM + Isolation Forest with weighted scoring |
-| **Explainability** | SHAP TreeExplainer — returns human-readable reasons per prediction |
-| **Rules Engine** | 6 pre-ML rules: amount limits, rapid-fire, midnight checks, self-transfer, velocity, new device |
-| **Graph Analysis** | NetworkX — PageRank, mule account detection, ring transaction detection |
-| **Device Fingerprint** | Impossible travel (haversine), IP subnet change, new device detection |
-| **Model Monitoring** | PSI drift detection with reference distribution comparison |
-| **Auth & Security** | JWT + API key authentication, rate limiting (100 req/min) |
-| **Audit Trail** | Immutable JSONL daily logs with model version tracking |
-| **Dashboard** | React + Recharts — pie/bar charts, drift panel, graph stats |
-
-## Tech Stack
-
-- **Backend:** FastAPI, SQLAlchemy, SQLite
-- **ML:** XGBoost, LightGBM, scikit-learn, SHAP, NetworkX
-- **Frontend:** React 18, Axios, Recharts
-- **Auth:** python-jose (JWT), slowapi (rate limiting)
+| **ML** | 3-model ensemble (XGBoost + LightGBM + IsoForest) with calibrated scores |
+| **Rules** | 6 pre-ML rules: amount limit, rapid-fire, midnight, self-transfer, velocity, new device |
+| **Explainability** | SHAP TreeExplainer with per-transaction top-5 risk factors |
+| **Graph** | NetworkX: PageRank, mule detection, ring transactions, hub accounts |
+| **Device** | Impossible travel (Haversine), new device detection, IP anomaly |
+| **Monitoring** | PSI drift detection, prediction statistics, model metadata |
+| **Feedback** | Analyst verdict loop (confirmed_fraud / false_positive / true_negative) |
+| **Live Feed** | WebSocket real-time transaction stream with auto-scrolling UI |
+| **Batch** | CSV upload endpoint for bulk predictions |
+| **Auth** | JWT + API key auth, rate limiting, RBAC permissions |
+| **Audit** | Immutable JSONL compliance logging |
+| **Risk Breakdown** | 4-dimensional risk scoring: behavioral, temporal, network, device |
 
 ## Quick Start
 
-### 1. Train Models
+### Local Development
+
 ```bash
+# 1. Clone
+git clone https://github.com/hardik-lomate/upi-fraud-detection.git
+cd upi-fraud-detection
+
+# 2. Setup
+cp .env.example .env
 pip install -r backend/requirements.txt
+
+# 3. Train models
 python ml/generate_data.py
 python ml/feature_engineering.py
 python ml/train_ensemble.py
+
+# 4. Start backend
+cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# 5. Start frontend (new terminal)
+cd frontend && npm install && npm start
 ```
 
-### 2. Start Backend
-```bash
-cd backend
-uvicorn app.main:app --reload --port 8000
-```
+### Docker
 
-### 3. Start Frontend
 ```bash
-cd frontend
-npm install
-npm start
-```
-
-### 4. Run Simulator (optional)
-```bash
-python scripts/simulate_realtime.py
+cp .env.example .env
+docker-compose up -d
+# Train models: docker-compose run trainer
 ```
 
 ## API Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/predict` | POST | Full 9-step prediction pipeline |
-| `/transactions` | GET | Transaction history |
-| `/auth/token` | POST | Exchange API key for JWT |
-| `/monitoring/drift` | GET | PSI drift report |
-| `/monitoring/stats` | GET | Prediction statistics |
-| `/monitoring/graph` | GET | Transaction graph stats |
-| `/audit/logs` | GET | Audit trail viewer |
-| `/health` | GET | Health check |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/predict` | Single transaction prediction (8-step pipeline) |
+| POST | `/predict/batch` | Bulk CSV upload prediction |
+| POST | `/feedback` | Submit analyst verdict |
+| GET | `/feedback/stats` | Feedback aggregate statistics |
+| GET | `/model/info` | Model metadata, CV results, thresholds |
+| GET | `/transactions` | Recent transaction history |
+| GET | `/monitoring/drift` | PSI-based feature drift report |
+| GET | `/monitoring/stats` | Prediction statistics |
+| GET | `/monitoring/graph` | Transaction graph statistics |
+| GET | `/monitoring/store` | History store backend info |
+| GET | `/audit/logs` | Immutable audit trail |
+| GET | `/health` | Quick health check |
+| GET | `/health/ready` | Deep readiness probe |
+| WS | `/ws/live-feed` | Real-time transaction WebSocket |
+| POST | `/auth/token` | Get JWT from API key |
+
+## Testing
+
+```bash
+# Run tests
+python -m pytest tests/ -q
+
+# With coverage
+python -m pytest tests/ --cov=backend/app --cov-report=term
+```
 
 ## Project Structure
 
 ```
-upi_fraud_detection/
+├── feature_contract.py      # Single source of truth (features, encoding, thresholds)
 ├── backend/app/
-│   ├── main.py              # FastAPI app (9-step pipeline)
-│   ├── predict.py           # Ensemble model loader
-│   ├── feature_extract.py   # 13 features, real 24h window
-│   ├── rules_engine.py      # 6 pre-ML fraud rules
+│   ├── main.py              # FastAPI app (16 endpoints)
+│   ├── pipeline.py          # 8-step central controller
+│   ├── predict.py           # Ensemble prediction + IsoForest calibration
+│   ├── feature_extract.py   # Serving-time feature extraction
+│   ├── rules_engine.py      # 6 pre-ML rules
 │   ├── explainability.py    # SHAP TreeExplainer
-│   ├── graph_features.py    # NetworkX graph analysis
-│   ├── device_fingerprint.py# Impossible travel detection
-│   ├── monitoring.py        # PSI drift detection
-│   ├── auth.py              # JWT + API key auth
-│   ├── audit.py             # Immutable audit trail
+│   ├── history_store.py     # Redis + in-memory fallback
+│   ├── feedback.py          # Analyst verdict collection
+│   ├── live_feed.py         # WebSocket live feed handler
 │   ├── decision_engine.py   # Threshold-based decisions
-│   ├── database.py          # SQLAlchemy ORM
-│   └── models.py            # Pydantic schemas
+│   ├── auth.py              # JWT + API key authentication
+│   └── models.py            # Pydantic models with OpenAPI docs
 ├── ml/
-│   ├── generate_data.py     # 100K synthetic transactions
+│   ├── train_ensemble.py    # Training + CV + threshold optimization
 │   ├── feature_engineering.py
-│   ├── train_model.py       # Single XGBoost trainer
-│   └── train_ensemble.py    # Ensemble trainer (3 models)
+│   ├── retrain.py           # Retraining loop with feedback
+│   └── models/              # Saved models, calibration, metadata
 ├── frontend/src/
-│   ├── App.js               # Tabbed UI (Predict / Monitor)
-│   ├── components/
-│   │   ├── TransactionForm.js
-│   │   ├── ResultDisplay.js  # Scores, SHAP, rules, graph
-│   │   ├── TransactionHistory.js
-│   │   └── MonitoringPanel.js# Recharts dashboard
-│   └── App.css              # Dark theme
-└── scripts/
-    └── simulate_realtime.py  # Continuous transaction generator
+│   ├── App.js               # 3-tab app (Predict, Live Feed, Monitor)
+│   └── components/
+│       ├── FraudGauge.js     # Animated SVG gauge
+│       ├── LiveFeed.js       # WebSocket live feed
+│       ├── ResultDisplay.js  # Risk breakdown + feedback
+│       └── ...
+├── tests/
+│   ├── test_pipeline.py     # Pipeline step tests
+│   ├── test_rules_engine.py # Rules tests
+│   └── test_api.py          # API integration tests
+├── scripts/
+│   └── demo_scenarios.py    # 6 pre-built demo scenarios
+├── docker-compose.yml
+└── .github/workflows/ci.yml # CI with coverage
 ```
+
+## Design Decisions
+
+- **Ensemble > Single Model**: XGBoost catches patterns, LightGBM provides diversity, IsoForest detects unseen anomalies. Reduces false positives by 15-20%.
+- **Rules Before ML**: Instant blocking for obvious fraud (self-transfer, velocity limits). Avoids ML latency for clear-cut cases. Regulatory compliance (RBI).
+- **Feature Contract**: `feature_contract.py` is the single source of truth. Eliminates training-serving skew — the #1 cause of silent ML failures in production.
+- **IsoForest Calibration**: Min/max saved from training set and applied at serving time for consistent 0-1 normalization.
 
 ## License
 

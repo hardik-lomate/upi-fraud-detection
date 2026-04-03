@@ -87,11 +87,10 @@ def step_extract_features(ctx: PipelineContext, extract_fn) -> PipelineContext:
 def step_rules_engine(ctx: PipelineContext, evaluate_fn, decision_fn) -> PipelineContext:
     """Step 2: Run pre-ML rules engine."""
     try:
-        # Enrich raw_txn with feature context for rules
         enriched = {
             **ctx.raw_txn,
             "_sender_txn_count": ctx.features.get("sender_txn_count_24h", 0),
-            "_sender_txn_count_1h": ctx.features.get("sender_txn_count_24h", 0),
+            "_sender_txn_count_1h": ctx.features.get("_sender_txn_count_1h", 0),
             "_sender_total_24h": (ctx.features.get("sender_avg_amount", 0) *
                                   ctx.features.get("sender_txn_count_24h", 0)),
             "_is_new_device": ctx.features.get("is_new_device", 0) == 1,
