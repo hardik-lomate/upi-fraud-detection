@@ -126,7 +126,20 @@ export default function App() {
         // refresh persisted history after the state changes
         refreshHistory();
         return res;
-      } catch {
+      } catch (err) {
+        // If server responded with an error (auth, not-found, validation), don't
+        // pretend verification succeeded.
+        if (err?.response) {
+          const status = err.response.status;
+          const detail = err.response.data?.detail;
+          setErrorBanner(`Verification failed (${status}). ${detail || ''}`.trim());
+          return {
+            verification_status: 'ERROR',
+            message: detail || 'Verification failed.',
+          };
+        }
+
+        // Network failure: keep demo interactive.
         const res = simulateVerifyFallback(txn);
         const next = {
           ...txn,
