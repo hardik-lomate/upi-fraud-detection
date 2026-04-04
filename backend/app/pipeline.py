@@ -87,11 +87,12 @@ def step_validate(ctx: PipelineContext, txn_dict: dict) -> PipelineContext:
             ctx.timestamp = datetime.now().isoformat()
             ctx.errors.append("Validation warning: invalid timestamp; using server time")
     else:
-        # Deterministic timestamp when missing (stable time-of-day signals)
-        # Base day is fixed to keep repeatability for identical requests.
-        base = datetime(2026, 1, 1)
-        seconds = int(sha1(ctx.txn_id.encode("utf-8")).hexdigest()[:8], 16) % 86400
-        ctx.timestamp = (base.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(seconds=seconds)).isoformat()
+        # Deterministic timestamp when missing.
+        # Constrain to a weekday daytime window so auto-generated timestamps
+        # don't accidentally land at midnight and trip night-based rules.
+        base = datetime(2026, 1, 5, 10, 0, 0)  # Monday 10:00
+        seconds = int(sha1(ctx.txn_id.encode("utf-8")).hexdigest()[:8], 16) % (8 * 3600)  # 10:00–18:00
+        ctx.timestamp = (base + timedelta(seconds=seconds)).isoformat()
 
     raw = {**txn_dict, "transaction_id": ctx.txn_id, "timestamp": ctx.timestamp}
 

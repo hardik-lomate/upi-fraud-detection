@@ -23,8 +23,8 @@ function formatRisk(score) {
 function Row({ label, value }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
-      <div className="text-xs text-textSecondary">{label}</div>
-      <div className="text-sm font-medium text-textPrimary tabular-nums">{value}</div>
+      <div className="shrink-0 text-xs text-textSecondary">{label}</div>
+      <div className="min-w-0 truncate text-right text-sm font-medium text-textPrimary tabular-nums">{value}</div>
     </div>
   );
 }
@@ -41,7 +41,7 @@ function Section({ title, children }) {
 export default function TransactionDetailsPanel({ txn, onVerifyClick }) {
   return (
     <aside className="rounded-xl border border-border bg-surface">
-      <div className="flex items-start justify-between gap-4 px-4 py-4">
+      <div className="flex items-center justify-between gap-4 px-4 py-3">
         <div>
           <div className="text-sm font-semibold text-textPrimary">Transaction Details</div>
           <div className="mt-1 text-xs text-textSecondary">{txn?.transaction_id || 'Select a transaction'}</div>
