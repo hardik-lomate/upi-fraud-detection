@@ -7,7 +7,9 @@ import json
 import os
 import sys
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
+from typing import Optional, List
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 from feature_contract import MODEL_VERSION
@@ -85,12 +87,43 @@ def get_audit_logs(date: str = None, limit: int = 100) -> list[dict]:
     if not log_file.exists():
         return []
 
-    records = []
+    records: list[dict] = []
     with open(log_file, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
                 records.append(json.loads(line))
-                if len(records) >= limit:
-                    break
+    if limit and limit > 0:
+        records = records[-limit:]
+    # Return newest-first for UI readability
+    records.reverse()
     return records
+
+
+def get_prediction_audit_record(transaction_id: str, dates: Optional[List[str]] = None) -> Optional[dict]:
+    """Fetch the most recent PREDICTION audit record for a given transaction_id."""
+    if not transaction_id:
+        return None
+
+    if dates is None:
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+        dates = [today, yesterday]
+
+    for d in dates:
+        log_file = AUDIT_DIR / f"audit_{d}.jsonl"
+        if not log_file.exists():
+            continue
+        try:
+            with open(log_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            for line in reversed(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                if rec.get("event_type") == "PREDICTION" and rec.get("transaction_id") == transaction_id:
+                    return rec
+        except Exception:
+            continue
+    return None

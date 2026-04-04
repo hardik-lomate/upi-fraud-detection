@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 WINDOW_1H = timedelta(hours=1)
 WINDOW_24H = timedelta(hours=24)
 WINDOW_7D = timedelta(days=7)
+WINDOW_COOLDOWN = timedelta(minutes=30)
 
 
 def _filter_window(transactions: list, now: datetime, window: timedelta) -> list:
@@ -51,12 +52,24 @@ def extract_features(txn: dict) -> dict:
 
     hist = get_sender_history(sender)
 
+    # Cooldown: after a successful verification, temporarily reduce strictness.
+    cooldown_active = 0
+    last_verified = hist.get("last_verified_at")
+    if last_verified:
+        try:
+            last_verified_dt = datetime.fromisoformat(str(last_verified).replace("Z", "+00:00"))
+            if ts - last_verified_dt <= WINDOW_COOLDOWN:
+                cooldown_active = 1
+        except Exception:
+            cooldown_active = 0
+
     # Real time-windowed counts
     txns_24h = _filter_window(hist["transactions"], ts, WINDOW_24H)
     txns_1h = _filter_window(hist["transactions"], ts, WINDOW_1H)
 
     sender_txn_count_24h = len(txns_24h)
     amounts_24h = [amt for _, amt, _, _ in txns_24h]
+    sender_total_amount_24h = float(sum(amounts_24h)) if amounts_24h else 0.0
 
     if amounts_24h:
         sender_avg_amount = sum(amounts_24h) / len(amounts_24h)
@@ -117,5 +130,7 @@ def extract_features(txn: dict) -> dict:
 
     # Expose 1h count for rules engine (not a model feature)
     features["_sender_txn_count_1h"] = len(txns_1h)
+    features["_sender_total_amount_24h"] = sender_total_amount_24h
+    features["_cooldown_active"] = cooldown_active
 
     return features

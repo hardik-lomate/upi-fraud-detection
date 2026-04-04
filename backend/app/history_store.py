@@ -73,6 +73,7 @@ def get_sender_history(sender: str) -> dict:
                     "last_ip": data.get("last_ip"),
                     "last_location": data.get("last_location"),
                     "last_timestamp": data.get("last_timestamp"),
+                    "last_verified_at": data.get("last_verified_at"),
                 }
         except Exception as e:
             logger.warning(f"Redis read failed for {sender}: {e}")
@@ -86,6 +87,7 @@ def get_sender_history(sender: str) -> dict:
             "last_ip": None,
             "last_location": None,
             "last_timestamp": None,
+            "last_verified_at": None,
         }
     return _memory_store[sender]
 
@@ -108,6 +110,7 @@ def save_sender_history(sender: str, hist: dict):
                 "last_ip": hist.get("last_ip"),
                 "last_location": hist.get("last_location"),
                 "last_timestamp": hist.get("last_timestamp"),
+                "last_verified_at": hist.get("last_verified_at"),
             }
             _redis_client.setex(_redis_key(sender), REDIS_TTL_SECONDS, json.dumps(data))
         except Exception as e:

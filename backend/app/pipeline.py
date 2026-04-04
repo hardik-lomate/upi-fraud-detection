@@ -9,7 +9,7 @@ No scattered logic — one clear sequence:
 Every step returns structured data. Every step is independently testable.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
@@ -65,9 +65,17 @@ class PipelineContext:
 
 def step_validate(ctx: PipelineContext, txn_dict: dict) -> PipelineContext:
     """Step 0: Validate and normalize input."""
-    ctx.txn_id = txn_dict.get("transaction_id") or (
-        f"TXN_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
-    )
+    provided_txn_id = txn_dict.get("transaction_id")
+    if provided_txn_id:
+        ctx.txn_id = str(provided_txn_id)
+    else:
+        # Deterministic ID for demo stability: same input payload → same txn_id
+        sender_part = str(txn_dict.get("sender_upi") or "").strip()
+        receiver_part = str(txn_dict.get("receiver_upi") or "").strip()
+        amount_part = str(txn_dict.get("amount") or "")
+        type_part = str(txn_dict.get("transaction_type") or "purchase")
+        seed = f"{sender_part}|{receiver_part}|{amount_part}|{type_part}"
+        ctx.txn_id = f"TXN_{sha1(seed.encode('utf-8')).hexdigest()[:16]}"
     raw_ts = txn_dict.get("timestamp")
     if raw_ts:
         try:
@@ -80,9 +88,13 @@ def step_validate(ctx: PipelineContext, txn_dict: dict) -> PipelineContext:
             ctx.timestamp = datetime.now().isoformat()
             ctx.errors.append("Validation warning: invalid timestamp; using server time")
     else:
-        ctx.timestamp = datetime.now().isoformat()
+        # Deterministic timestamp when missing (stable time-of-day signals)
+        # Base day is fixed to keep repeatability for identical requests.
+        base = datetime(2026, 1, 1)
+        seconds = int(sha1(ctx.txn_id.encode("utf-8")).hexdigest()[:8], 16) % 86400
+        ctx.timestamp = (base.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(seconds=seconds)).isoformat()
 
-    raw = {**txn_dict, "timestamp": ctx.timestamp}
+    raw = {**txn_dict, "transaction_id": ctx.txn_id, "timestamp": ctx.timestamp}
 
     sender = (raw.get("sender_upi") or "").strip()
     receiver = (raw.get("receiver_upi") or "").strip()
@@ -144,8 +156,10 @@ def step_rules_engine(ctx: PipelineContext, evaluate_fn, decision_fn) -> Pipelin
             **ctx.raw_txn,
             "_sender_txn_count": ctx.features.get("sender_txn_count_24h", 0),
             "_sender_txn_count_1h": ctx.features.get("_sender_txn_count_1h", 0),
-            "_sender_total_24h": (ctx.features.get("sender_avg_amount", 0) *
-                                  ctx.features.get("sender_txn_count_24h", 0)),
+            "_sender_total_24h": ctx.features.get(
+                "_sender_total_amount_24h",
+                (ctx.features.get("sender_avg_amount", 0) * ctx.features.get("sender_txn_count_24h", 0)),
+            ),
             "_is_new_device": ctx.features.get("is_new_device", 0) == 1,
         }
         ctx.rules_triggered = evaluate_fn(enriched)
@@ -234,6 +248,7 @@ def step_graph_analysis(ctx: PipelineContext, graph) -> PipelineContext:
         graph.add_transaction(
             sender, receiver,
             ctx.raw_txn["amount"], ctx.timestamp,
+            transaction_id=ctx.txn_id,
         )
         ctx.graph_info = graph.get_node_features(sender)
 

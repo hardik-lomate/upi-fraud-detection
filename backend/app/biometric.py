@@ -13,6 +13,7 @@ from .database import (
     update_transaction_status, get_user_fraud_history,
     increment_fraud_count, SessionLocal, TransactionRecord,
 )
+from .history_store import get_sender_history, save_sender_history
 import logging
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,12 @@ def verify_biometric(transaction_id: str, method: str = "fingerprint") -> dict:
     if passed:
         # Biometric verified — approve transaction
         update_transaction_status(transaction_id, "VERIFIED", "ALLOW")
+        try:
+            hist = get_sender_history(sender)
+            hist["last_verified_at"] = txn.get("timestamp") or datetime.utcnow().isoformat()
+            save_sender_history(sender, hist)
+        except Exception:
+            pass
         logger.info(f"Biometric PASSED for {transaction_id} (score={fraud_score:.2f}, method={method})")
         return {
             "transaction_id": transaction_id,

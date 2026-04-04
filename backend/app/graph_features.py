@@ -15,9 +15,15 @@ class TransactionGraph:
     def __init__(self):
         self.graph = nx.DiGraph()
         self._edge_timestamps = defaultdict(list)  # (sender, receiver) -> [timestamps]
+        self._seen_txn_ids = set()
 
-    def add_transaction(self, sender: str, receiver: str, amount: float, timestamp: str = None):
+    def add_transaction(self, sender: str, receiver: str, amount: float, timestamp: str = None, transaction_id: str = None):
         """Add a transaction edge to the graph."""
+        if transaction_id:
+            if transaction_id in self._seen_txn_ids:
+                return
+            self._seen_txn_ids.add(transaction_id)
+
         if timestamp:
             try:
                 ts_str = str(timestamp)

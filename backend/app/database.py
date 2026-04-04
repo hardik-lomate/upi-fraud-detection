@@ -1,9 +1,11 @@
 import os
 
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +97,43 @@ def save_transaction(txn_id, sender, receiver, amount, fraud_score, decision, ti
             timestamp=timestamp,
         )
         db.add(record)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            # Idempotency: update existing row
+            existing = db.query(TransactionRecord).filter(TransactionRecord.transaction_id == txn_id).first()
+            if existing:
+                existing.sender_upi = sender
+                existing.receiver_upi = receiver
+                existing.amount = amount
+                existing.fraud_score = fraud_score
+                existing.decision = decision
+                existing.status = status
+                existing.device_id = device_id
+                existing.timestamp = timestamp
+                db.commit()
+    finally:
+        db.close()
+
+
+def get_transaction_by_id(txn_id: str) -> Optional[dict]:
+    db = SessionLocal()
+    try:
+        r = db.query(TransactionRecord).filter(TransactionRecord.transaction_id == txn_id).first()
+        if not r:
+            return None
+        return {
+            "transaction_id": r.transaction_id,
+            "sender_upi": r.sender_upi,
+            "receiver_upi": r.receiver_upi,
+            "amount": r.amount,
+            "fraud_score": r.fraud_score,
+            "decision": r.decision,
+            "status": r.status,
+            "timestamp": r.timestamp,
+            "device_id": r.device_id or "",
+        }
     finally:
         db.close()
 

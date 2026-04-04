@@ -27,10 +27,13 @@ def _derive_signals(features: dict, device_anomalies: Optional[list], graph_info
     tx_1h = int(features.get("_sender_txn_count_1h", 0) or 0)
     tx_24h = int(features.get("sender_txn_count_24h", 0) or 0)
     is_night = int(features.get("is_night", 0) or 0) == 1
+    cooldown_active = int(features.get("_cooldown_active", 0) or 0) == 1
 
     trusted_receiver = not is_new_receiver
 
     strong = 0
+    if cooldown_active:
+        reasons.append("Recent verification")
     if abs(amount_dev) >= 3.0:
         reasons.append("High amount anomaly")
         strong += 1
@@ -121,6 +124,9 @@ def make_decision(
     is_flagged = bool((fraud_hist or {}).get("is_flagged") or False)
 
     effective_score = float(fraud_score)
+    if int(features.get("_cooldown_active", 0) or 0) == 1:
+        # Small reduction to avoid immediate re-flagging right after successful verification.
+        effective_score = max(0.0, effective_score - 0.10)
     if fraud_count > 0:
         # Small additive bump to reflect prior behavior.
         effective_score = min(1.0, effective_score + 0.03 * min(fraud_count, 5))
@@ -136,10 +142,7 @@ def make_decision(
 
     # MEDIUM risk — require identity verification
     if effective_score < THRESHOLD_BLOCK:
-        msg = (
-            f"Suspicious activity detected ({effective_score*100:.1f}%). "
-            "Biometric verification required to proceed."
-        )
+        msg = "This transaction is unusual. Please verify your identity to prevent fraud."
         # Track the flag
         if sender_upi:
             increment_fraud_count(sender_upi, was_blocked=False)
@@ -163,7 +166,7 @@ def make_decision(
             increment_fraud_count(sender_upi, was_blocked=False)
         return (
             "REQUIRE_BIOMETRIC", "HIGH",
-            f"High risk detected ({effective_score*100:.1f}%) but receiver is trusted. Verification required.",
+            "This transaction is high risk, but the receiver is trusted. Please verify to continue.",
             (signal_reasons + ["Trusted receiver"])[:6],
         )
 
@@ -180,7 +183,7 @@ def make_decision(
         increment_fraud_count(sender_upi, was_blocked=False)
     return (
         "REQUIRE_BIOMETRIC", "HIGH",
-        f"High risk detected ({effective_score*100:.1f}%). Biometric verification required before it can proceed.",
+        "This transaction is high risk. Please verify your identity to prevent fraud.",
         signal_reasons[:6],
     )
 

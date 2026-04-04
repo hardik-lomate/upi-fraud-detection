@@ -17,7 +17,7 @@ import os
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-from feature_contract import MODEL_VERSION
+from feature_contract import MODEL_VERSION, THRESHOLD_BLOCK
 
 from .models import (
     TransactionRequest, PredictionResponse, TokenRequest, TokenResponse,
@@ -27,10 +27,17 @@ from .models import (
 from .predict import predict_fraud, load_all_models, get_metadata, get_thresholds
 from .feature_extract import extract_features
 from .history_store import hydrate_from_db, get_store_stats
-from .database import save_transaction, get_transactions, init_db, load_recent_history, get_flagged_users
+from .database import (
+    save_transaction,
+    get_transactions,
+    init_db,
+    load_recent_history,
+    get_flagged_users,
+    get_transaction_by_id,
+)
 from .rules_engine import evaluate_rules, get_rule_decision
 from .explainability import explain_prediction, format_reasons
-from .audit import log_prediction, get_audit_logs
+from .audit import log_prediction, get_audit_logs, get_prediction_audit_record
 from .auth import get_current_client, check_permission, create_access_token
 from .monitoring import record_prediction, get_drift_report, get_prediction_stats, load_reference_distribution
 from .device_fingerprint import check_device_anomalies, update_device_history
@@ -216,6 +223,56 @@ async def predict(
 ):
     check_permission(client, "predict")
     try:
+        # Idempotency for deterministic demos: if transaction_id already exists, return stored outcome.
+        if txn.transaction_id:
+            existing = get_transaction_by_id(txn.transaction_id)
+            if existing:
+                audit_rec = get_prediction_audit_record(txn.transaction_id)
+                fraud_score = float(existing.get("fraud_score") or 0.0)
+                decision = existing.get("decision") or "ALLOW"
+
+                if decision == "ALLOW":
+                    risk_level = "LOW"
+                elif decision == "BLOCK":
+                    risk_level = "HIGH"
+                else:
+                    risk_level = "HIGH" if fraud_score >= THRESHOLD_BLOCK else "MEDIUM"
+
+                reasons = []
+                if audit_rec and isinstance(audit_rec.get("reasons"), list):
+                    reasons = audit_rec.get("reasons")
+
+                if decision == "ALLOW":
+                    msg = "Transaction looks normal. Approved."
+                elif decision == "BLOCK":
+                    msg = "Transaction is high risk and was blocked to protect the user."
+                else:
+                    msg = "This transaction is unusual. Please verify your identity to prevent fraud."
+
+                status = existing.get("status") or (
+                    "PENDING_VERIFICATION" if decision == "REQUIRE_BIOMETRIC" else ("BLOCKED" if decision == "BLOCK" else "ALLOWED")
+                )
+
+                resp = {
+                    "transaction_id": existing["transaction_id"],
+                    "fraud_score": fraud_score,
+                    "decision": decision,
+                    "risk_level": risk_level,
+                    "message": msg,
+                    "requires_biometric": decision == "REQUIRE_BIOMETRIC",
+                    "biometric_methods": ["fingerprint", "face", "iris"] if decision == "REQUIRE_BIOMETRIC" else [],
+                    "status": status,
+                    "reasons": reasons,
+                    "individual_scores": {},
+                    "models_used": [],
+                    "rules_triggered": [],
+                    "device_anomalies": [],
+                    "graph_info": None,
+                    "risk_breakdown": None,
+                    "model_version": MODEL_VERSION,
+                }
+                return PredictionResponse(**resp)
+
         ctx = _run_prediction(txn.model_dump())
 
         if ctx.errors:
@@ -224,14 +281,29 @@ async def predict(
         record_prediction(ctx.fraud_score, ctx.features)
 
         rules_names = [r.rule_name for r in ctx.rules_triggered]
-        background_tasks.add_task(
-            _bg_save, ctx.txn_id, txn.sender_upi, txn.receiver_upi,
-            txn.amount, ctx.fraud_score, ctx.decision, ctx.timestamp, ctx.raw_txn.get("sender_device_id") or "",
+        # Persist synchronously for demo stability (immediate idempotent reads).
+        _bg_save(
+            ctx.txn_id,
+            txn.sender_upi,
+            txn.receiver_upi,
+            txn.amount,
+            ctx.fraud_score,
+            ctx.decision,
+            ctx.timestamp,
+            ctx.raw_txn.get("sender_device_id") or "",
         )
-        background_tasks.add_task(
-            _bg_audit, ctx.txn_id, txn.sender_upi, txn.receiver_upi,
-            txn.amount, ctx.fraud_score, ctx.decision, ctx.risk_level,
-            ctx.reasons, rules_names, ctx.features, ctx.timestamp,
+        _bg_audit(
+            ctx.txn_id,
+            txn.sender_upi,
+            txn.receiver_upi,
+            txn.amount,
+            ctx.fraud_score,
+            ctx.decision,
+            ctx.risk_level,
+            ctx.reasons,
+            rules_names,
+            ctx.features,
+            ctx.timestamp,
         )
 
         resp = _ctx_to_response(ctx)
