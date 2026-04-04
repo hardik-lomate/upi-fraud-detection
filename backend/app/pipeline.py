@@ -117,28 +117,30 @@ def step_ml_predict(ctx: PipelineContext, predict_fn) -> PipelineContext:
 
 
 def step_decide(ctx: PipelineContext) -> PipelineContext:
-    """Step 4: Make final decision (rules override ML)."""
+    """Step 4: Make final decision (rules can override ML; step-up biometric for medium risk)."""
+    from .decision_engine import make_decision
+    from .database import increment_fraud_count
+
     if ctx.rule_decision == "BLOCK":
-        ctx.decision = "BLOCK"
-        ctx.risk_level = "HIGH"
-        rules_names = [r.rule_name for r in ctx.rules_triggered if r.action == "BLOCK"]
-        ctx.message = f"Blocked by rule: {rules_names[0] if rules_names else 'unknown'}"
+        # Rule-triggered blocks cannot be bypassed
+        rules_list = [{"rule_name": r.rule_name, "action": r.action} for r in ctx.rules_triggered]
+        ctx.decision, ctx.risk_level, ctx.message = make_decision(
+            ctx.fraud_score, sender_upi=ctx.raw_txn.get("sender_upi"), rules_triggered=rules_list
+        )
     elif ctx.rule_decision == "FLAG":
-        ctx.decision = "FLAG"
+        # Rule flagged — require biometric
+        ctx.decision = "REQUIRE_BIOMETRIC"
         ctx.risk_level = "MEDIUM"
         rules_names = [r.rule_name for r in ctx.rules_triggered if r.action == "FLAG"]
-        ctx.message = f"Flagged by rule: {rules_names[0] if rules_names else 'unknown'}. ML score: {ctx.fraud_score:.1%}"
+        ctx.message = f"Flagged by rule: {rules_names[0] if rules_names else 'unknown'}. Biometric verification required."
+        sender = ctx.raw_txn.get("sender_upi")
+        if sender:
+            increment_fraud_count(sender, was_blocked=False)
     else:
-        # Pure ML decision
-        if ctx.fraud_score >= THRESHOLD_BLOCK:
-            ctx.decision, ctx.risk_level = "BLOCK", "HIGH"
-            ctx.message = f"High fraud probability ({ctx.fraud_score:.1%}). Transaction blocked."
-        elif ctx.fraud_score >= THRESHOLD_FLAG:
-            ctx.decision, ctx.risk_level = "FLAG", "MEDIUM"
-            ctx.message = f"Moderate fraud risk ({ctx.fraud_score:.1%}). Flagged for review."
-        else:
-            ctx.decision, ctx.risk_level = "ALLOW", "LOW"
-            ctx.message = f"Transaction appears legitimate ({ctx.fraud_score:.1%}). Approved."
+        # Pure ML decision with step-up auth
+        ctx.decision, ctx.risk_level, ctx.message = make_decision(
+            ctx.fraud_score, sender_upi=ctx.raw_txn.get("sender_upi")
+        )
     ctx.processing_steps.append("decide")
     return ctx
 
@@ -166,8 +168,12 @@ def step_device_check(ctx: PipelineContext, check_fn, update_fn, sender_history)
 
         if any(a["type"] == "IMPOSSIBLE_TRAVEL" for a in anomalies):
             if ctx.decision == "ALLOW":
-                ctx.decision, ctx.risk_level = "FLAG", "MEDIUM"
-                ctx.message = "Flagged: Impossible travel detected"
+                ctx.decision, ctx.risk_level = "REQUIRE_BIOMETRIC", "MEDIUM"
+                ctx.message = "Suspicious: Impossible travel detected. Biometric verification required."
+                sender = ctx.raw_txn.get("sender_upi")
+                if sender:
+                    from .database import increment_fraud_count
+                    increment_fraud_count(sender, was_blocked=False)
         ctx.processing_steps.append("device_check")
     except Exception as e:
         ctx.errors.append(f"Device check failed: {e}")
@@ -185,8 +191,12 @@ def step_graph_analysis(ctx: PipelineContext, graph) -> PipelineContext:
 
         # Flag mule suspects
         if ctx.graph_info.get("is_mule_suspect") and ctx.decision == "ALLOW":
-            ctx.decision, ctx.risk_level = "FLAG", "MEDIUM"
-            ctx.message = "Flagged: Mule account pattern detected"
+            ctx.decision, ctx.risk_level = "REQUIRE_BIOMETRIC", "MEDIUM"
+            ctx.message = "Suspicious: Mule account pattern detected. Biometric verification required."
+            sender = ctx.raw_txn.get("sender_upi")
+            if sender:
+                from .database import increment_fraud_count
+                increment_fraud_count(sender, was_blocked=False)
         ctx.processing_steps.append("graph_analysis")
     except Exception as e:
         ctx.errors.append(f"Graph analysis failed: {e}")

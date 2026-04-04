@@ -1,134 +1,226 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import TransactionForm from './components/TransactionForm';
-import ResultDisplay from './components/ResultDisplay';
-import TransactionHistory from './components/TransactionHistory';
-import MonitoringPanel from './components/MonitoringPanel';
-import LiveFeed from './components/LiveFeed';
-import axios from 'axios';
-import './App.css';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Sidebar from './components/Sidebar';
+import Topbar from './components/Topbar';
+import TransactionTable from './components/TransactionTable';
+import TransactionDetailsPanel from './components/TransactionDetailsPanel';
+import BiometricModal from './components/BiometricModal';
+import RiskMonitorPanel from './components/RiskMonitorPanel';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+import { fetchTransactions, predictTransaction, verifyBiometric } from './api/fraudApi';
+import { generateTransactionInput, simulatePredictFallback, simulateVerifyFallback } from './utils/simulate';
 
-function App() {
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
+function normalizePredictResponse(resp, input) {
+  return {
+    transaction_id: resp.transaction_id,
+    sender_upi: input?.sender_upi,
+    receiver_upi: input?.receiver_upi,
+    amount: input?.amount ?? resp.amount,
+    fraud_score: resp.fraud_score,
+    decision: resp.decision,
+    status: resp.status,
+    message: resp.message,
+    risk_level: resp.risk_level,
+    reasons: Array.isArray(resp.reasons) ? resp.reasons : [],
+    timestamp: resp.timestamp || input?.timestamp || new Date().toISOString(),
+    raw: resp,
+  };
+}
+
+export default function App() {
+  const [activeView, setActiveView] = useState('dashboard');
+  const [apiOnline, setApiOnline] = useState(true);
+
+  const [feed, setFeed] = useState([]);
   const [history, setHistory] = useState([]);
-  const [error, setError] = useState(null);
-  const [backendOnline, setBackendOnline] = useState(true);
-  const [activeTab, setActiveTab] = useState('predict');
-  const [darkMode, setDarkMode] = useState(() => {
-    const saved = localStorage.getItem('darkMode');
-    if (saved !== null) return JSON.parse(saved);
-    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true;
-  });
 
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', darkMode);
-    localStorage.setItem('darkMode', JSON.stringify(darkMode));
-  }, [darkMode]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [loadingFeed, setLoadingFeed] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
-  const fetchHistory = useCallback(async () => {
+  const [biometricOpen, setBiometricOpen] = useState(false);
+  const [errorBanner, setErrorBanner] = useState(null);
+
+  const simTimerRef = useRef(null);
+  const historyTimerRef = useRef(null);
+
+  const selectedTxn = useMemo(() => feed.find((t) => t.transaction_id === selectedId) || null, [feed, selectedId]);
+  const selectedHistoryTxn = useMemo(
+    () => history.find((t) => t.transaction_id === selectedId) || null,
+    [history, selectedId]
+  );
+
+  const visibleSelectedTxn = activeView === 'transactions' ? selectedHistoryTxn : selectedTxn;
+
+  const upsertFeedTxn = useCallback((txn) => {
+    setFeed((prev) => {
+      const next = [txn, ...prev.filter((p) => p.transaction_id !== txn.transaction_id)];
+      return next.slice(0, 25);
+    });
+    setSelectedId((prev) => prev || txn.transaction_id);
+  }, []);
+
+  const refreshHistory = useCallback(async () => {
+    setLoadingHistory(true);
     try {
-      const res = await axios.get(`${API_URL}/transactions?limit=30`, { timeout: 5000 });
-      setHistory(res.data);
-      setBackendOnline(true);
-    } catch (err) {
-      if (err.code === 'ERR_NETWORK' || err.code === 'ECONNABORTED') {
-        setBackendOnline(false);
-      }
+      const rows = await fetchTransactions(80);
+      setHistory(Array.isArray(rows) ? rows : []);
+      setApiOnline(true);
+    } catch {
+      setApiOnline(false);
+    } finally {
+      setLoadingHistory(false);
     }
   }, []);
 
-  useEffect(() => { fetchHistory(); }, [fetchHistory]);
+  const runOneSimulationTick = useCallback(async () => {
+    setLoadingFeed(true);
+    setErrorBanner(null);
 
-  const handleSubmit = async (transaction) => {
-    setLoading(true);
-    setError(null);
+    const input = generateTransactionInput();
+
     try {
-      const res = await axios.post(`${API_URL}/predict`, transaction, { timeout: 10000 });
-      setResult(res.data);
-      setBackendOnline(true);
-      fetchHistory();
-    } catch (err) {
-      if (err.code === 'ERR_NETWORK' || err.code === 'ECONNABORTED') {
-        setError('Backend unreachable. Ensure FastAPI is running on port 8000.');
-        setBackendOnline(false);
-      } else if (err.response?.status === 422) {
-        const detail = err.response.data?.detail;
-        const msg = Array.isArray(detail)
-          ? detail.map((d) => `${d.loc?.join('.')}: ${d.msg}`).join('; ')
-          : 'Invalid input.';
-        setError(msg);
-      } else {
-        setError(err.response?.data?.detail || 'Prediction failed.');
-      }
+      const resp = await predictTransaction(input);
+      const txn = normalizePredictResponse(resp, input);
+      upsertFeedTxn(txn);
+      setApiOnline(true);
+    } catch {
+      // Fallback keeps the demo interactive even if the API is down.
+      const fallback = simulatePredictFallback(input);
+      const txn = normalizePredictResponse(fallback, input);
+      upsertFeedTxn(txn);
+      setApiOnline(false);
+      setErrorBanner('API unreachable — using simulated demo data.');
     } finally {
-      setLoading(false);
+      setLoadingFeed(false);
     }
-  };
+  }, [upsertFeedTxn]);
 
-  const handleRetry = () => { setError(null); setBackendOnline(true); fetchHistory(); };
+  useEffect(() => {
+    // initial load
+    refreshHistory();
+    runOneSimulationTick();
 
-  const tabs = [
-    { id: 'predict', label: '🔍 Predict' },
-    { id: 'live', label: '📡 Live Feed' },
-    { id: 'monitor', label: '📊 Monitor' },
-  ];
+    // live simulation
+    simTimerRef.current = setInterval(runOneSimulationTick, 4000);
+    // keep history page fresh
+    historyTimerRef.current = setInterval(refreshHistory, 12000);
+
+    return () => {
+      if (simTimerRef.current) clearInterval(simTimerRef.current);
+      if (historyTimerRef.current) clearInterval(historyTimerRef.current);
+    };
+  }, [refreshHistory, runOneSimulationTick]);
+
+  const handleVerify = useCallback(
+    async (txn) => {
+      try {
+        const res = await verifyBiometric(txn.transaction_id);
+        const next = {
+          ...txn,
+          decision: res.final_decision,
+          status: res.verification_status === 'VERIFIED' ? 'VERIFIED' : 'BLOCKED',
+          message: res.message,
+        };
+        upsertFeedTxn(next);
+        setHistory((prev) => prev.map((p) => (p.transaction_id === next.transaction_id ? { ...p, ...next } : p)));
+        // refresh persisted history after the state changes
+        refreshHistory();
+        return res;
+      } catch {
+        const res = simulateVerifyFallback(txn);
+        const next = {
+          ...txn,
+          decision: res.final_decision,
+          status: res.verification_status === 'VERIFIED' ? 'VERIFIED' : 'BLOCKED',
+          message: res.message,
+        };
+        upsertFeedTxn(next);
+        setHistory((prev) => prev.map((p) => (p.transaction_id === next.transaction_id ? { ...p, ...next } : p)));
+        setApiOnline(false);
+        setErrorBanner('API unreachable — biometric result simulated.');
+        return res;
+      }
+    },
+    [refreshHistory, upsertFeedTxn]
+  );
+
+  const title = useMemo(() => {
+    if (activeView === 'dashboard') return 'Dashboard';
+    if (activeView === 'transactions') return 'Transactions';
+    if (activeView === 'risk') return 'Risk Monitor';
+    if (activeView === 'settings') return 'Settings';
+    return 'Dashboard';
+  }, [activeView]);
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <div className="header-content">
-          <h1>🛡️ UPI Fraud Detection</h1>
-          <p className="subtitle">v2.0 — Ensemble ML · SHAP · Graph Analysis · Real-time</p>
-          <button className="theme-toggle" onClick={() => setDarkMode(!darkMode)} title="Toggle theme">
-            {darkMode ? '☀️' : '🌙'}
-          </button>
-          {!backendOnline && (
-            <div className="status-bar offline">
-              ⚠️ Backend offline — <button onClick={handleRetry} className="retry-link">Retry</button>
-            </div>
-          )}
-        </div>
-        <nav className="tab-nav">
-          {tabs.map(tab => (
-            <button key={tab.id} className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}>
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-      </header>
+    <div className="min-h-screen bg-bg">
+      <Sidebar active={activeView} onChange={setActiveView} />
 
-      <main className="app-main">
-        {activeTab === 'predict' ? (
-          <>
-            <div className="left-panel">
-              <TransactionForm onSubmit={handleSubmit} loading={loading} disabled={!backendOnline} />
-              {error && (
-                <div className="error-banner">
-                  <span>{error}</span>
-                  <button onClick={handleRetry} className="retry-btn">Retry</button>
-                </div>
-              )}
-              {result && <ResultDisplay result={result} />}
+      <div className="pl-[220px]">
+        <Topbar title={title} apiOnline={apiOnline} />
+
+        {errorBanner ? (
+          <div className="px-6 pt-4">
+            <div className="rounded-md border border-warning/20 bg-warning/10 px-4 py-3 text-sm text-warning">
+              {errorBanner}
             </div>
-            <div className="right-panel">
-              <TransactionHistory history={history} />
+          </div>
+        ) : null}
+
+        {activeView === 'dashboard' && (
+          <main className="px-6 py-6">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_420px]">
+              <TransactionTable
+                title="Live Transactions"
+                rows={feed}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                loading={loadingFeed}
+              />
+              <TransactionDetailsPanel txn={selectedTxn} onVerifyClick={() => setBiometricOpen(true)} />
             </div>
-          </>
-        ) : activeTab === 'live' ? (
-          <div className="full-panel">
-            <LiveFeed />
-          </div>
-        ) : (
-          <div className="full-panel">
-            <MonitoringPanel apiUrl={API_URL} />
-          </div>
+          </main>
         )}
-      </main>
+
+        {activeView === 'transactions' && (
+          <main className="px-6 py-6">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_420px]">
+              <TransactionTable
+                title="Stored Transactions"
+                rows={history}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                loading={loadingHistory}
+              />
+              <TransactionDetailsPanel txn={selectedHistoryTxn} onVerifyClick={() => setBiometricOpen(true)} />
+            </div>
+          </main>
+        )}
+
+        {activeView === 'risk' && (
+          <main className="px-6 py-6">
+            <RiskMonitorPanel apiOnline={apiOnline} />
+          </main>
+        )}
+
+        {activeView === 'settings' && (
+          <main className="px-6 py-6">
+            <div className="rounded-xl border border-border bg-surface px-4 py-4">
+              <div className="text-sm font-semibold text-textPrimary">Settings</div>
+              <div className="mt-2 text-sm text-textSecondary">
+                Configure API access using REACT_APP_API_URL. Authentication can be enabled in the backend via AUTH_REQUIRED.
+              </div>
+            </div>
+          </main>
+        )}
+      </div>
+
+      <BiometricModal
+        open={biometricOpen}
+        txn={visibleSelectedTxn}
+        onClose={() => setBiometricOpen(false)}
+        onVerify={handleVerify}
+      />
     </div>
   );
 }
-
-export default App;

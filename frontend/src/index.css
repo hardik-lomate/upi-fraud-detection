@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+
+  /* Palette (RGB triplets) */
+  --c-bg: 11 15 20;            /* #0B0F14 */
+  --c-surface: 18 24 33;       /* #121821 */
+  --c-primary: 37 99 235;      /* #2563EB */
+  --c-text-primary: 229 231 235;   /* #E5E7EB */
+  --c-text-secondary: 156 163 175; /* #9CA3AF */
+  --c-success: 22 163 74;      /* #16A34A */
+  --c-warning: 217 119 6;      /* #D97706 */
+  --c-danger: 220 38 38;       /* #DC2626 */
+  --c-border: 31 41 55;        /* #1F2937 */
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-textPrimary font-sans antialiased;
+}

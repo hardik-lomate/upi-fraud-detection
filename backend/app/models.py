@@ -68,9 +68,11 @@ class PredictionResponse(BaseModel):
     transaction_id: str
     fraud_score: float = Field(..., ge=0.0, le=1.0,
         description="Ensemble fraud probability. XGBoost(45%) + LightGBM(35%) + IsoForest(20%)")
-    decision: str = Field(..., description="ALLOW, FLAG, or BLOCK")
+    decision: str = Field(..., description="ALLOW, REQUIRE_BIOMETRIC, or BLOCK")
     risk_level: str = Field(..., description="LOW, MEDIUM, or HIGH")
     message: str = Field(..., description="Human-readable decision explanation")
+    requires_biometric: bool = Field(False, description="True if step-up biometric verification is needed")
+    biometric_methods: list[str] = Field(default=["fingerprint", "face"], description="Available biometric methods")
     reasons: list[str] = Field(default=[], description="Top SHAP-based risk factors")
     individual_scores: dict = Field(default={}, description="Per-model fraud scores")
     models_used: list[str] = Field(default=[], description="Models that contributed to this prediction")
@@ -79,6 +81,7 @@ class PredictionResponse(BaseModel):
     graph_info: Optional[GraphInfo] = Field(None, description="Network analysis results")
     risk_breakdown: Optional[RiskBreakdown] = Field(None, description="Multi-dimensional risk scores")
     model_version: str = Field("2.0.0", description="Model version used for this prediction")
+    status: str = Field("ALLOWED", description="Transaction state: ALLOWED, BLOCKED, PENDING_VERIFICATION, VERIFIED")
 
     model_config = {
         "json_schema_extra": {

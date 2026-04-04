@@ -123,7 +123,7 @@ def test_step_decide_ml_block():
     ctx.rule_decision = None
     ctx.fraud_score = 0.85
     ctx = step_decide(ctx)
-    assert ctx.decision == "BLOCK"
+    assert ctx.decision == "REQUIRE_BIOMETRIC"
     assert ctx.risk_level == "HIGH"
 
 

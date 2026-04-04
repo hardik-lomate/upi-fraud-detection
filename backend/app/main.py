@@ -26,7 +26,7 @@ from .models import (
 from .predict import predict_fraud, load_all_models, get_metadata, get_thresholds
 from .feature_extract import extract_features
 from .history_store import hydrate_from_db, get_store_stats
-from .database import save_transaction, get_transactions, init_db, load_recent_history
+from .database import save_transaction, get_transactions, init_db, load_recent_history, get_flagged_users
 from .rules_engine import evaluate_rules, get_rule_decision
 from .explainability import explain_prediction, format_reasons
 from .audit import log_prediction, get_audit_logs
@@ -37,6 +37,7 @@ from .graph_features import get_graph
 from .pipeline import run_pipeline
 from .feedback import save_feedback, get_feedback_stats
 from .live_feed import live_feed_handler
+from .biometric import verify_biometric
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("upi_fraud")
@@ -142,12 +143,22 @@ def _run_prediction(txn_dict: dict):
 
 def _ctx_to_response(ctx) -> dict:
     risk = _compute_risk_breakdown(ctx)
+    is_biometric = ctx.decision == "REQUIRE_BIOMETRIC"
+    if is_biometric:
+        status = "PENDING_VERIFICATION"
+    elif ctx.decision == "BLOCK":
+        status = "BLOCKED"
+    else:
+        status = "ALLOWED"
     return {
         "transaction_id": ctx.txn_id,
         "fraud_score": ctx.fraud_score,
         "decision": ctx.decision,
         "risk_level": ctx.risk_level,
         "message": ctx.message,
+        "requires_biometric": is_biometric,
+        "biometric_methods": ["fingerprint", "face", "iris"] if is_biometric else [],
+        "status": status,
         "reasons": ctx.reasons,
         "individual_scores": ctx.individual_scores,
         "models_used": ctx.models_used,
@@ -260,7 +271,7 @@ async def batch_predict(
 
             if ctx.decision == "BLOCK":
                 blocked += 1
-            elif ctx.decision == "FLAG":
+            elif ctx.decision == "REQUIRE_BIOMETRIC":
                 flagged += 1
             else:
                 allowed += 1
@@ -303,9 +314,46 @@ async def submit_feedback(request: Request, fb: FeedbackRequest, client: dict = 
     return {"status": "ok", "transaction_id": fb.transaction_id, "verdict": fb.analyst_verdict}
 
 @app.get("/feedback/stats", summary="Feedback statistics",
-         description="Aggregate stats on analyst verdicts — false positive rate, confirmed fraud rate, etc.")
+         description="Aggregate stats on analyst verdicts -- false positive rate, confirmed fraud rate, etc.")
 async def feedback_stats(client: dict = Depends(get_current_client)):
     return get_feedback_stats()
+
+
+# =============================================
+# Biometric Verification
+# =============================================
+
+@app.post("/verify-biometric", summary="Simulate biometric verification",
+          description="Simulate fingerprint/face verification for a PENDING_VERIFICATION transaction. Returns VERIFIED/FAILED and final decision.")
+@limiter.limit("30/minute")
+async def verify_biometric_endpoint(
+    request: Request,
+    body: dict,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "predict")
+    txn_id = body.get("transaction_id")
+    method = body.get("method", "fingerprint")
+    if not txn_id:
+        raise HTTPException(status_code=422, detail="transaction_id is required")
+    if method not in ("fingerprint", "face", "iris"):
+        raise HTTPException(status_code=422, detail="method must be one of: fingerprint, face, iris")
+    result = verify_biometric(txn_id, method=method)
+    if result["verification_status"] == "ERROR":
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result
+
+
+# =============================================
+# Fraud History / Flagged Users
+# =============================================
+
+@app.get("/fraud-history/flagged", summary="Get flagged users",
+         description="List users with fraud history, sorted by fraud count.")
+async def flagged_users(limit: int = 50, client: dict = Depends(get_current_client)):
+    check_permission(client, "audit")
+    users = get_flagged_users(limit=limit)
+    return {"flagged_users": users, "total": len(users)}
 
 
 # =============================================
