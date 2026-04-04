@@ -20,7 +20,7 @@ if not SECRET_KEY:
     # In development, use a default but warn loudly
     if os.getenv("AUTH_REQUIRED", "true").lower() == "false":
         SECRET_KEY = "dev-only-insecure-key-do-not-use-in-production"
-        logger.warning("⚠️  Using insecure dev JWT key. Set JWT_SECRET_KEY in production.")
+        logger.warning("[WARN] Using insecure dev JWT key. Set JWT_SECRET_KEY in production.")
     else:
         raise RuntimeError(
             "JWT_SECRET_KEY environment variable is required. "

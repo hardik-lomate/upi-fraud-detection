@@ -25,9 +25,9 @@ def _load_if_exists(name: str, filename: str):
     path = MODELS_DIR / filename
     if path.exists():
         _models[name] = joblib.load(path)
-        print(f"  ✅ {name} loaded")
+        print(f"  [OK] {name} loaded")
     else:
-        print(f"  ⚠️  {name} not found — skipping")
+        print(f"  [WARN] {name} not found -- skipping")
 
 
 def load_all_models():
@@ -45,17 +45,17 @@ def load_all_models():
     calib_path = MODELS_DIR / "iso_calibration.pkl"
     if calib_path.exists():
         _iso_calibration = joblib.load(calib_path)
-        print(f"  ✅ IsoForest calibration: min={_iso_calibration['min']:.4f}, max={_iso_calibration['max']:.4f}")
+        print(f"  [OK] IsoForest calibration: min={_iso_calibration['min']:.4f}, max={_iso_calibration['max']:.4f}")
     else:
         _iso_calibration = None
-        print("  ⚠️  No IsoForest calibration — using sigmoid fallback")
+        print("  [WARN] No IsoForest calibration -- using sigmoid fallback")
 
     # Optimized thresholds
     thresh_path = MODELS_DIR / "thresholds.json"
     if thresh_path.exists():
         with open(thresh_path) as f:
             _thresholds = json.load(f)
-        print(f"  ✅ Thresholds: FLAG={_thresholds['threshold_flag']}, BLOCK={_thresholds['threshold_block']}")
+        print(f"  [OK] Thresholds: FLAG={_thresholds['threshold_flag']}, BLOCK={_thresholds['threshold_block']}")
     else:
         _thresholds = None
 

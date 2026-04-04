@@ -202,7 +202,7 @@ async def predict(
 ):
     check_permission(client, "predict")
     try:
-        ctx = _run_prediction(txn.dict())
+        ctx = _run_prediction(txn.model_dump())
 
         if ctx.errors:
             logger.warning(f"Pipeline errors for {ctx.txn_id}: {ctx.errors}")
@@ -395,8 +395,9 @@ async def readiness():
     # DB
     try:
         from .database import engine
+        from sqlalchemy import text
         with engine.connect() as conn:
-            conn.execute("SELECT 1" if hasattr(conn, 'execute') else None)
+            conn.execute(text("SELECT 1"))
         checks["database"] = "ok"
     except Exception as e:
         checks["database"] = f"error: {e}"

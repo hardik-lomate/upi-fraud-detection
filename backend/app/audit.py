@@ -5,13 +5,15 @@ Every prediction decision is logged with full context for compliance.
 
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+from feature_contract import MODEL_VERSION
+
 AUDIT_DIR = Path(__file__).resolve().parent.parent.parent / "audit_logs"
 AUDIT_DIR.mkdir(exist_ok=True)
-
-MODEL_VERSION = "1.0.0"  # Update this when retraining models
 
 
 def _get_log_file() -> Path:

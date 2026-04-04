@@ -25,9 +25,9 @@ try:
                                 socket_connect_timeout=2)
     _redis_client.ping()
     _use_redis = True
-    logger.info("✅ Redis connected — using Redis for sender history")
+    logger.info("[OK] Redis connected -- using Redis for sender history")
 except Exception:
-    logger.info("⚠️  Redis unavailable — using in-memory dict with DB fallback")
+    logger.info("[WARN] Redis unavailable -- using in-memory dict with DB fallback")
 
 # In-memory fallback
 _memory_store: dict = {}

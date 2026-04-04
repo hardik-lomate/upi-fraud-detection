@@ -7,7 +7,11 @@ import numpy as np
 from collections import deque
 from datetime import datetime
 import json
+import sys, os
 from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+from feature_contract import THRESHOLD_FLAG, THRESHOLD_BLOCK
 
 # Rolling window of recent predictions for monitoring
 WINDOW_SIZE = 1000
@@ -124,9 +128,9 @@ def get_prediction_stats() -> dict:
     scores = [p["score"] for p in prediction_window]
     decisions = {"ALLOW": 0, "FLAG": 0, "BLOCK": 0}
     for s in scores:
-        if s < 0.3:
+        if s < THRESHOLD_FLAG:
             decisions["ALLOW"] += 1
-        elif s < 0.7:
+        elif s < THRESHOLD_BLOCK:
             decisions["FLAG"] += 1
         else:
             decisions["BLOCK"] += 1
