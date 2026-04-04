@@ -5,6 +5,10 @@ Device Fingerprinting — Detect impossible travel, SIM swaps, and device anomal
 import math
 from datetime import datetime, timedelta
 
+from typing import Optional
+
+from .history_store import get_sender_history, save_sender_history
+
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Calculate distance between two GPS coordinates in kilometers."""
@@ -50,22 +54,21 @@ def check_impossible_travel(
     }
 
 
-def check_device_anomalies(txn: dict, sender_history: dict) -> list[dict]:
+def check_device_anomalies(txn: dict, features: Optional[dict] = None) -> list[dict]:
     """
     Analyze device-related anomalies for a transaction.
     Returns a list of detected anomalies.
     """
     anomalies = []
     sender = txn.get("sender_upi", "")
-
-    if sender not in sender_history:
+    if not sender:
         return anomalies
 
-    hist = sender_history[sender]
+    hist = get_sender_history(sender)
 
-    # 1. New device detection (already in features, but add detail)
+    # 1. New device detection (use serving-time feature so order doesn't matter)
     device = txn.get("sender_device_id", "")
-    if device and device not in hist.get("devices", set()):
+    if features and features.get("is_new_device", 0) == 1:
         anomalies.append({
             "type": "NEW_DEVICE",
             "severity": "MEDIUM",
@@ -88,7 +91,7 @@ def check_device_anomalies(txn: dict, sender_history: dict) -> list[dict]:
     # 3. Impossible travel (if GPS data available)
     current_lat = txn.get("sender_location_lat")
     current_lon = txn.get("sender_location_lon")
-    if current_lat and current_lon and hist.get("last_location"):
+    if current_lat is not None and current_lon is not None and hist.get("last_location"):
         last_loc = hist["last_location"]
         last_time = hist.get("last_timestamp")
         if last_time:
@@ -113,21 +116,23 @@ def check_device_anomalies(txn: dict, sender_history: dict) -> list[dict]:
     return anomalies
 
 
-def update_device_history(txn: dict, sender_history: dict):
+def update_device_history(txn: dict):
     """Update sender history with device/location info for future checks."""
     sender = txn.get("sender_upi", "")
-    if sender not in sender_history:
+    if not sender:
         return
 
-    hist = sender_history[sender]
+    hist = get_sender_history(sender)
     hist["last_ip"] = txn.get("sender_ip", "")
 
     lat = txn.get("sender_location_lat")
     lon = txn.get("sender_location_lon")
-    if lat and lon:
+    if lat is not None and lon is not None:
         hist["last_location"] = {"lat": lat, "lon": lon}
 
     try:
         hist["last_timestamp"] = txn.get("timestamp", datetime.now().isoformat())
     except (ValueError, TypeError):
         pass
+
+    save_sender_history(sender, hist)

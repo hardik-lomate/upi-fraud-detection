@@ -223,7 +223,7 @@ async def predict(
         rules_names = [r.rule_name for r in ctx.rules_triggered]
         background_tasks.add_task(
             _bg_save, ctx.txn_id, txn.sender_upi, txn.receiver_upi,
-            txn.amount, ctx.fraud_score, ctx.decision, ctx.timestamp, txn.sender_device_id,
+            txn.amount, ctx.fraud_score, ctx.decision, ctx.timestamp, ctx.raw_txn.get("sender_device_id") or "",
         )
         background_tasks.add_task(
             _bg_audit, ctx.txn_id, txn.sender_upi, txn.receiver_upi,
@@ -323,6 +323,8 @@ async def feedback_stats(client: dict = Depends(get_current_client)):
 # Biometric Verification
 # =============================================
 
+@app.post("/verify", summary="Simulate biometric verification",
+          description="Alias for /verify-biometric")
 @app.post("/verify-biometric", summary="Simulate biometric verification",
           description="Simulate fingerprint/face verification for a PENDING_VERIFICATION transaction. Returns VERIFIED/FAILED and final decision.")
 @limiter.limit("30/minute")

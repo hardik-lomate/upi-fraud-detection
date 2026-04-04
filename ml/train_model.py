@@ -11,26 +11,15 @@ from sklearn.metrics import (
 import joblib
 import os
 
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from feature_contract import FEATURE_COLUMNS
+
 # --- Load data ---
 df = pd.read_csv("ml/data/processed/features.csv")
 
-FEATURE_COLS = [
-    "amount",
-    "hour",
-    "day_of_week",
-    "is_night",
-    "is_weekend",
-    "txn_type_encoded",
-    "sender_txn_count_24h",
-    "sender_avg_amount",
-    "sender_std_amount",
-    "amount_deviation",
-    "sender_unique_receivers_24h",
-    "is_new_device",
-    "is_new_receiver",
-]
-
-X = df[FEATURE_COLS]
+X = df[FEATURE_COLUMNS]
 y = df["is_fraud"]
 
 # --- Split ---
@@ -74,11 +63,11 @@ print(confusion_matrix(y_test, y_pred))
 # --- Feature Importance ---
 importance = model.feature_importances_
 print("\n=== Feature Importance ===")
-for feat, imp in sorted(zip(FEATURE_COLS, importance), key=lambda x: -x[1]):
+for feat, imp in sorted(zip(FEATURE_COLUMNS, importance), key=lambda x: -x[1]):
     print(f"  {feat:30s} {imp:.4f}")
 
 # --- Save ---
 os.makedirs("ml/models", exist_ok=True)
 joblib.dump(model, "ml/models/xgboost_model.pkl")
-joblib.dump(FEATURE_COLS, "ml/models/feature_columns.pkl")
+joblib.dump(FEATURE_COLUMNS, "ml/models/feature_columns.pkl")
 print("\nModel saved to ml/models/xgboost_model.pkl")

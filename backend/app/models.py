@@ -14,7 +14,7 @@ class TransactionRequest(BaseModel):
     receiver_upi: str = Field(..., min_length=3, description="Receiver's UPI ID", examples=["merchant456@upi"])
     amount: float = Field(..., gt=0, le=500000, description="Transaction amount in INR (₹1 to ₹5,00,000)")
     timestamp: Optional[str] = Field(None, description="ISO 8601 timestamp. Auto-set to now if omitted.")
-    sender_device_id: str = Field(..., min_length=1, description="Device fingerprint", examples=["DEV_ABC123"])
+    sender_device_id: Optional[str] = Field(None, min_length=1, description="Device fingerprint (auto-generated if omitted)", examples=["DEV_ABC123"])
     sender_ip: Optional[str] = Field(None, description="Sender's IP address for geo-analysis")
     transaction_type: Literal["purchase", "transfer", "bill_payment", "recharge"] = Field(
         "purchase", description="Type of UPI transaction"

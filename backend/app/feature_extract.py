@@ -8,8 +8,9 @@ import sys, os
 import logging
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-from feature_contract import FEATURE_COLUMNS, TXN_TYPE_MAP, NIGHT_HOUR_CUTOFF, WEEKEND_DAY_CUTOFF
+from feature_contract import TXN_TYPE_MAP, NIGHT_HOUR_CUTOFF, WEEKEND_DAY_CUTOFF
 from .history_store import get_sender_history, save_sender_history
+from .feature_columns import validate_feature_dict
 
 logger = logging.getLogger(__name__)
 
@@ -28,17 +29,25 @@ def extract_features(txn: dict) -> dict:
     Extract features from a raw transaction dict.
     Returns a dict keyed by FEATURE_COLUMNS names.
     """
-    ts = datetime.fromisoformat(txn.get("timestamp", datetime.now().isoformat()))
+    try:
+        ts = datetime.fromisoformat(txn.get("timestamp", datetime.now().isoformat()))
+    except (TypeError, ValueError):
+        ts = datetime.now()
     hour = ts.hour
     day_of_week = ts.weekday()
     is_night = 1 if hour <= NIGHT_HOUR_CUTOFF else 0
     is_weekend = 1 if day_of_week >= WEEKEND_DAY_CUTOFF else 0
-    txn_type_encoded = TXN_TYPE_MAP.get(txn["transaction_type"], 0)
+    txn_type_encoded = TXN_TYPE_MAP.get(txn.get("transaction_type") or "purchase", 0)
 
-    sender = txn["sender_upi"]
-    amount = txn["amount"]
-    device = txn["sender_device_id"]
-    receiver = txn["receiver_upi"]
+    sender = txn.get("sender_upi")
+    receiver = txn.get("receiver_upi")
+    amount = float(txn.get("amount") or 0)
+    device = txn.get("sender_device_id") or ""
+
+    if not sender or not receiver:
+        raise ValueError("sender_upi and receiver_upi are required")
+    if amount <= 0:
+        raise ValueError("amount must be > 0")
 
     hist = get_sender_history(sender)
 
@@ -102,8 +111,7 @@ def extract_features(txn: dict) -> dict:
         "is_new_receiver": is_new_receiver,
     }
 
-    # Contract check
-    missing = set(FEATURE_COLUMNS) - set(features.keys())
+    missing = validate_feature_dict(features)
     if missing:
         raise ValueError(f"Feature contract violation! Missing: {missing}")
 

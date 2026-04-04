@@ -51,6 +51,9 @@ def get_sender_history(sender: str) -> dict:
                     "transactions": txns,
                     "devices": set(data.get("devices", [])),
                     "receivers": set(data.get("receivers", [])),
+                    "last_ip": data.get("last_ip"),
+                    "last_location": data.get("last_location"),
+                    "last_timestamp": data.get("last_timestamp"),
                 }
         except Exception as e:
             logger.warning(f"Redis read failed for {sender}: {e}")
@@ -61,6 +64,9 @@ def get_sender_history(sender: str) -> dict:
             "transactions": [],
             "devices": set(),
             "receivers": set(),
+            "last_ip": None,
+            "last_location": None,
+            "last_timestamp": None,
         }
     return _memory_store[sender]
 
@@ -80,6 +86,9 @@ def save_sender_history(sender: str, hist: dict):
                 ],
                 "devices": list(hist.get("devices", set())),
                 "receivers": list(hist.get("receivers", set())),
+                "last_ip": hist.get("last_ip"),
+                "last_location": hist.get("last_location"),
+                "last_timestamp": hist.get("last_timestamp"),
             }
             _redis_client.setex(_redis_key(sender), REDIS_TTL_SECONDS, json.dumps(data))
         except Exception as e:
@@ -99,6 +108,7 @@ def hydrate_from_db(records: list):
         hist["transactions"].append((ts, r["amount"], r["device_id"], r["receiver_upi"]))
         hist["devices"].add(r["device_id"])
         hist["receivers"].add(r["receiver_upi"])
+        hist["last_timestamp"] = r.get("timestamp")
         save_sender_history(sender, hist)
         count += 1
     logger.info(f"Hydrated {count} transactions for {len(_memory_store)} senders "

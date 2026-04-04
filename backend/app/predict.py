@@ -1,5 +1,6 @@
-"""
-Ensemble Prediction — loads models, IsoForest calibration, and enforces feature contract.
+"""Ensemble Prediction.
+
+Loads models + calibration and enforces *training-time* feature ordering.
 """
 
 import joblib
@@ -9,7 +10,9 @@ import json
 import sys, os
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-from feature_contract import FEATURE_COLUMNS, ENSEMBLE_DEFAULTS
+from feature_contract import ENSEMBLE_DEFAULTS
+
+from .feature_columns import get_feature_columns
 
 BASE_DIR = Path(__file__).resolve().parent
 MODELS_DIR = BASE_DIR.parent.parent / "ml" / "models"
@@ -65,7 +68,7 @@ def load_all_models():
         with open(meta_path) as f:
             _metadata = json.load(f)
 
-    print(f"  Feature order: {FEATURE_COLUMNS}")
+    print(f"  Feature order: {get_feature_columns()}")
     print(f"Models ready: {list(_models.keys())}")
 
 
@@ -81,7 +84,12 @@ def predict_fraud(features_dict: dict) -> dict:
     if not _models:
         load_all_models()
 
-    ordered = [features_dict[col] for col in FEATURE_COLUMNS]
+    feature_columns = get_feature_columns()
+    missing = [c for c in feature_columns if c not in features_dict]
+    if missing:
+        raise ValueError(f"Missing required features for prediction: {missing}")
+
+    ordered = [features_dict[c] for c in feature_columns]
     X = np.array(ordered).reshape(1, -1)
 
     scores = {}
