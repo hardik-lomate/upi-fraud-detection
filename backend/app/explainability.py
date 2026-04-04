@@ -81,24 +81,29 @@ def format_reasons(explanations: list[dict]) -> list[str]:
     """Convert SHAP explanations into simple human-readable sentences."""
     reasons = []
     for exp in explanations:
-        direction = "↑ Risk" if exp["direction"] == "increases_risk" else "↓ Safe"
-        label = exp["label"]
-        val = exp["value"]
+        if exp.get("direction") != "increases_risk":
+            continue
 
-        if exp["feature"] == "amount":
-            reasons.append(f"{direction}: {label} is ₹{val:,.0f}")
-        elif exp["feature"] in ("is_night", "is_weekend", "is_new_device", "is_new_receiver"):
-            if val == 1:
-                reasons.append(f"{direction}: {label}")
-        elif exp["feature"] == "hour":
-            reasons.append(f"{direction}: Transaction at {int(val)}:00 hours")
-        elif exp["feature"] == "amount_deviation":
-            reasons.append(f"{direction}: Amount is {abs(val):.1f}σ from sender's average")
-        elif exp["feature"] == "sender_txn_count_24h":
-            reasons.append(f"{direction}: Sender made {int(val)} transactions in 24h")
-        elif exp["feature"] == "sender_unique_receivers_24h":
-            reasons.append(f"{direction}: Sent to {int(val)} unique receivers in 24h")
+        label = exp.get("label")
+        val = exp.get("value")
+
+        feat = exp.get("feature")
+        if feat == "amount":
+            reasons.append("High amount")
+        elif feat == "is_new_device" and val == 1:
+            reasons.append("New device")
+        elif feat == "is_new_receiver" and val == 1:
+            reasons.append("New receiver")
+        elif feat == "is_night" and val == 1:
+            reasons.append("Unusual time")
+        elif feat == "amount_deviation":
+            reasons.append("Amount anomaly")
+        elif feat == "sender_txn_count_24h":
+            reasons.append("High 24h activity")
+        elif feat == "sender_unique_receivers_24h":
+            reasons.append("Many receivers")
         else:
-            reasons.append(f"{direction}: {label} = {val:.2f}")
+            if label:
+                reasons.append(str(label))
 
     return reasons

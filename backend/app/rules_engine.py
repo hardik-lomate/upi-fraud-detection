@@ -30,8 +30,12 @@ def rule_amount_limit(txn: dict) -> RuleResult:
 
 
 def rule_rapid_fire(txn: dict) -> RuleResult:
-    """Flag if sender has > 10 transactions in last hour."""
+    """Flag if sender has > 10 transactions in last hour; BLOCK on extreme bursts."""
     count_1h = txn.get("_sender_txn_count_1h", 0)
+    if count_1h >= 25:
+        return RuleResult(True, "RAPID_FIRE_TRANSACTIONS",
+                          f"{count_1h} transactions in the last hour",
+                          "BLOCK")
     if count_1h > 10:
         return RuleResult(True, "RAPID_FIRE_TRANSACTIONS",
                           f"{count_1h} transactions in the last hour",

@@ -43,6 +43,7 @@ from .monitoring import record_prediction, get_drift_report, get_prediction_stat
 from .device_fingerprint import check_device_anomalies, update_device_history
 from .graph_features import get_graph
 from .pipeline import run_pipeline
+from .pipeline import PipelineContext, step_validate
 from .feedback import save_feedback, get_feedback_stats
 from .live_feed import live_feed_handler
 from .biometric import verify_biometric
@@ -223,11 +224,16 @@ async def predict(
 ):
     check_permission(client, "predict")
     try:
-        # Idempotency for deterministic demos: if transaction_id already exists, return stored outcome.
-        if txn.transaction_id:
-            existing = get_transaction_by_id(txn.transaction_id)
+        # Idempotency for deterministic demos: compute the final transaction_id (even if omitted)
+        # and if it already exists, return the stored outcome.
+        tmp_ctx = PipelineContext()
+        tmp_ctx = step_validate(tmp_ctx, txn.model_dump())
+        txn_id = tmp_ctx.txn_id
+
+        if txn_id:
+            existing = get_transaction_by_id(txn_id)
             if existing:
-                audit_rec = get_prediction_audit_record(txn.transaction_id)
+                audit_rec = get_prediction_audit_record(txn_id)
                 fraud_score = float(existing.get("fraud_score") or 0.0)
                 decision = existing.get("decision") or "ALLOW"
 
@@ -273,7 +279,7 @@ async def predict(
                 }
                 return PredictionResponse(**resp)
 
-        ctx = _run_prediction(txn.model_dump())
+            ctx = _run_prediction(txn.model_dump())
 
         if ctx.errors:
             logger.warning(f"Pipeline errors for {ctx.txn_id}: {ctx.errors}")

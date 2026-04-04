@@ -123,6 +123,13 @@ def make_decision(
     fraud_count = int((fraud_hist or {}).get("fraud_count") or 0)
     is_flagged = bool((fraud_hist or {}).get("is_flagged") or False)
 
+    # Fraud history is a signal (not an automatic hard-block) to avoid over-blocking.
+    if fraud_count > 0 or is_flagged:
+        if "Prior fraud history" not in signal_reasons:
+            signal_reasons = ["Prior fraud history", *signal_reasons]
+        if fraud_count >= 3 or is_flagged:
+            strong_count += 1
+
     effective_score = float(fraud_score)
     if int(features.get("_cooldown_active", 0) or 0) == 1:
         # Small reduction to avoid immediate re-flagging right after successful verification.
@@ -130,7 +137,6 @@ def make_decision(
     if fraud_count > 0:
         # Small additive bump to reflect prior behavior.
         effective_score = min(1.0, effective_score + 0.03 * min(fraud_count, 5))
-        signal_reasons = ["Prior fraud history", *signal_reasons]
 
     # LOW risk — instant ALLOW
     if effective_score < THRESHOLD_FLAG:
@@ -148,19 +154,10 @@ def make_decision(
             increment_fraud_count(sender_upi, was_blocked=False)
         return ("REQUIRE_BIOMETRIC", "MEDIUM", msg, signal_reasons[:6])
 
-    # HIGH risk — upgrade logic:
-    # - Trusted receiver gets VERIFY (biometric) rather than auto-block
-    # - Block only when multiple strong risk signals, or user is strongly flagged
-
-    if is_flagged or fraud_count >= 3:
-        if sender_upi:
-            increment_fraud_count(sender_upi, was_blocked=True)
-        return (
-            "BLOCK", "HIGH",
-            f"Transaction blocked ({effective_score*100:.1f}%). Repeat-risk account.",
-            signal_reasons[:6],
-        )
-
+    # HIGH risk — spec-aligned logic:
+    # - Trusted receiver → VERIFY
+    # - Block only when multiple strong risk signals
+    # - Else → VERIFY
     if trusted_receiver:
         if sender_upi:
             increment_fraud_count(sender_upi, was_blocked=False)

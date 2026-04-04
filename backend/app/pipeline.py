@@ -10,7 +10,6 @@ Every step returns structured data. Every step is independently testable.
 """
 
 from datetime import datetime, timedelta
-import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 from hashlib import sha1
@@ -216,7 +215,17 @@ def step_explain(ctx: PipelineContext, explain_fn, format_fn) -> PipelineContext
     try:
         explanations = explain_fn(ctx.features, get_feature_columns(), top_n=5)
         shap_reasons = format_fn(explanations)
-        ctx.reasons = [*ctx.decision_reasons, *shap_reasons]
+        combined = [*ctx.decision_reasons, *shap_reasons]
+        deduped = []
+        seen = set()
+        for r in combined:
+            if not r:
+                continue
+            if r in seen:
+                continue
+            seen.add(r)
+            deduped.append(r)
+        ctx.reasons = deduped
         ctx.processing_steps.append("explain")
     except Exception as e:
         ctx.reasons = [*ctx.decision_reasons] or [f"Explainability unavailable: {e}"]
