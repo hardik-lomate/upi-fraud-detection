@@ -2,7 +2,7 @@
 import requests
 import sys
 
-BASE = "http://localhost:8000"
+BASE = "http://127.0.0.1:8000"
 PASS = 0
 FAIL = 0
 
@@ -44,7 +44,7 @@ check("requires_biometric=False", d2["requires_biometric"] == False)
 check("status=BLOCKED", d2["status"] == "BLOCKED", f"(got {d2['status']})")
 
 # 3. Medium risk → REQUIRE_BIOMETRIC
-print("\n--- 3. Medium Risk -> REQUIRE_BIOMETRIC ---")
+print("\n--- 3. Medium Risk -> VERIFY ---")
 # Use high amount but not self-transfer to trigger medium risk
 r3 = requests.post(f"{BASE}/predict", json={
     "sender_upi": "risky_user@upi", "receiver_upi": "unknown@upi",

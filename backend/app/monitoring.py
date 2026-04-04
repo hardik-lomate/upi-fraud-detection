@@ -126,12 +126,12 @@ def get_prediction_stats() -> dict:
         return {"total": 0}
 
     scores = [p["score"] for p in prediction_window]
-    decisions = {"ALLOW": 0, "REQUIRE_BIOMETRIC": 0, "BLOCK": 0}
+    decisions = {"ALLOW": 0, "VERIFY": 0, "BLOCK": 0}
     for s in scores:
         if s < THRESHOLD_FLAG:
             decisions["ALLOW"] += 1
         elif s < THRESHOLD_BLOCK:
-            decisions["REQUIRE_BIOMETRIC"] += 1
+                decisions["VERIFY"] += 1
         else:
             decisions["BLOCK"] += 1
 

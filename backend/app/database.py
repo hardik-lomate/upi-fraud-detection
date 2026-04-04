@@ -36,7 +36,7 @@ class TransactionRecord(Base):
     receiver_upi = Column(String(64))
     amount = Column(Float)
     fraud_score = Column(Float)
-    decision = Column(String(20))  # ALLOW, BLOCK, REQUIRE_BIOMETRIC
+    decision = Column(String(20))  # ALLOW, BLOCK, VERIFY
     status = Column(String(32), default="ALLOWED")  # ALLOWED, BLOCKED, PENDING_VERIFICATION, VERIFIED
     device_id = Column(String(64), default="")
     timestamp = Column(String(32))
@@ -79,7 +79,7 @@ def save_transaction(txn_id, sender, receiver, amount, fraud_score, decision, ti
     try:
         # Determine status from decision if not explicitly set
         if status is None:
-            if decision == "REQUIRE_BIOMETRIC":
+            if decision == "VERIFY":
                 status = "PENDING_VERIFICATION"
             elif decision == "BLOCK":
                 status = "BLOCKED"
@@ -202,6 +202,25 @@ def load_recent_history(days: int = 7) -> list:
             }
             for r in records
         ]
+    finally:
+        db.close()
+
+
+def count_recent_sender_transactions(sender_upi: str, seconds: int = 60) -> int:
+    """Count how many transactions this sender initiated in the last N seconds.
+
+    Uses DB arrival time (created_at) so it reflects real-time velocity, and it
+    remains persistent across backend restarts.
+    """
+    db = SessionLocal()
+    try:
+        cutoff = datetime.utcnow() - timedelta(seconds=seconds)
+        return (
+            db.query(TransactionRecord)
+            .filter(TransactionRecord.sender_upi == sender_upi)
+            .filter(TransactionRecord.created_at >= cutoff)
+            .count()
+        )
     finally:
         db.close()
 

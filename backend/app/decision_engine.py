@@ -18,18 +18,24 @@ from feature_contract import THRESHOLD_FLAG, THRESHOLD_BLOCK
 from .database import get_user_fraud_history, increment_fraud_count
 
 
-def _derive_signals(features: dict, device_anomalies: Optional[list], graph_info: Optional[dict]) -> tuple[list[str], int, bool]:
+def _derive_signals(
+    features: dict,
+    device_anomalies: Optional[list],
+    graph_info: Optional[dict],
+) -> tuple[list[str], int, bool, bool]:
     reasons: list[str] = []
 
     amount_dev = float(features.get("amount_deviation", 0) or 0)
     is_new_device = int(features.get("is_new_device", 0) or 0) == 1
     is_new_receiver = int(features.get("is_new_receiver", 0) or 0) == 1
+    tx_60s = int(features.get("_sender_txn_count_60s", 0) or 0)
     tx_1h = int(features.get("_sender_txn_count_1h", 0) or 0)
     tx_24h = int(features.get("sender_txn_count_24h", 0) or 0)
     is_night = int(features.get("is_night", 0) or 0) == 1
     cooldown_active = int(features.get("_cooldown_active", 0) or 0) == 1
 
     trusted_receiver = not is_new_receiver
+    high_velocity = False
 
     strong = 0
     if cooldown_active:
@@ -43,7 +49,11 @@ def _derive_signals(features: dict, device_anomalies: Optional[list], graph_info
     if is_new_receiver:
         reasons.append("New receiver")
         strong += 1
-    if tx_1h >= 5:
+    if tx_60s >= 5:
+        reasons.append("High velocity (last 60s)")
+        high_velocity = True
+        strong += 1
+    elif tx_1h >= 5:
         reasons.append("High velocity (last 1h)")
         strong += 1
     elif tx_24h >= 20:
@@ -77,7 +87,7 @@ def _derive_signals(features: dict, device_anomalies: Optional[list], graph_info
             seen.add(r)
             deduped.append(r)
 
-    return deduped[:8], strong, trusted_receiver
+    return deduped[:8], strong, trusted_receiver, high_velocity
 
 
 def make_decision(
@@ -92,7 +102,7 @@ def make_decision(
     Enhanced 3-level decision with step-up biometric auth.
 
     Returns: (decision, risk_level, message, reasons)
-      decision: ALLOW | REQUIRE_BIOMETRIC | BLOCK
+            decision: ALLOW | VERIFY | BLOCK
     """
     features = features or {}
     # If rules triggered a hard BLOCK, respect that — no biometric bypass
@@ -110,7 +120,7 @@ def make_decision(
             )
 
     # Derive human-readable risk signals
-    signal_reasons, strong_count, trusted_receiver = _derive_signals(
+    signal_reasons, strong_count, trusted_receiver, high_velocity = _derive_signals(
         features=features,
         device_anomalies=device_anomalies,
         graph_info=graph_info,
@@ -140,48 +150,52 @@ def make_decision(
 
     # LOW risk — instant ALLOW
     if effective_score < THRESHOLD_FLAG:
+        reasons = signal_reasons[:6] or ["Low risk score"]
         return (
             "ALLOW", "LOW",
             f"Transaction appears legitimate ({effective_score*100:.1f}%). Approved.",
-            signal_reasons[:6]
+            reasons,
         )
 
     # MEDIUM risk — require identity verification
-    if effective_score < THRESHOLD_BLOCK:
+    if effective_score <= THRESHOLD_BLOCK:
         msg = "This transaction is unusual. Please verify your identity to prevent fraud."
         # Track the flag
         if sender_upi:
             increment_fraud_count(sender_upi, was_blocked=False)
-        return ("REQUIRE_BIOMETRIC", "MEDIUM", msg, signal_reasons[:6])
+        reasons = signal_reasons[:6] or ["Unusual transaction"]
+        return ("VERIFY", "MEDIUM", msg, reasons)
 
     # HIGH risk — spec-aligned logic:
     # - Trusted receiver → VERIFY
-    # - Block only when multiple strong risk signals
+    # - Block when high velocity OR multiple strong risk signals
     # - Else → VERIFY
     if trusted_receiver:
         if sender_upi:
             increment_fraud_count(sender_upi, was_blocked=False)
         return (
-            "REQUIRE_BIOMETRIC", "HIGH",
+            "VERIFY", "HIGH",
             "This transaction is high risk, but the receiver is trusted. Please verify to continue.",
             (signal_reasons + ["Trusted receiver"])[:6],
         )
 
-    if strong_count >= 2:
+    if high_velocity or strong_count >= 2:
         if sender_upi:
             increment_fraud_count(sender_upi, was_blocked=True)
+        if high_velocity and "High velocity (last 60s)" not in signal_reasons:
+            signal_reasons = ["High velocity (last 60s)", *signal_reasons]
         return (
             "BLOCK", "HIGH",
             f"Transaction blocked ({effective_score*100:.1f}%). Multiple strong risk signals detected.",
-            signal_reasons[:6],
+            (signal_reasons[:6] or ["Multiple strong risk signals"]),
         )
 
     if sender_upi:
         increment_fraud_count(sender_upi, was_blocked=False)
     return (
-        "REQUIRE_BIOMETRIC", "HIGH",
+        "VERIFY", "HIGH",
         "This transaction is high risk. Please verify your identity to prevent fraud.",
-        signal_reasons[:6],
+        (signal_reasons[:6] or ["High risk score"]),
     )
 
 
@@ -191,6 +205,6 @@ def make_decision_simple(fraud_score: float) -> tuple:
     if fraud_score < THRESHOLD_FLAG:
         return ("ALLOW", "LOW", f"Transaction appears legitimate ({fraud_score*100:.1f}%). Approved.")
     elif fraud_score < THRESHOLD_BLOCK:
-        return ("REQUIRE_BIOMETRIC", "MEDIUM", f"Suspicious activity detected ({fraud_score*100:.1f}%). Biometric verification required.")
+        return ("VERIFY", "MEDIUM", f"Suspicious activity detected ({fraud_score*100:.1f}%). Verification required.")
     else:
-        return ("REQUIRE_BIOMETRIC", "HIGH", f"High risk detected ({fraud_score*100:.1f}%). Biometric verification required before transaction can proceed.")
+        return ("VERIFY", "HIGH", f"High risk detected ({fraud_score*100:.1f}%). Verification required before transaction can proceed.")

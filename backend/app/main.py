@@ -154,7 +154,7 @@ def _run_prediction(txn_dict: dict):
 
 def _ctx_to_response(ctx) -> dict:
     risk = _compute_risk_breakdown(ctx)
-    is_biometric = ctx.decision == "REQUIRE_BIOMETRIC"
+    is_biometric = ctx.decision == "VERIFY"
     if is_biometric:
         status = "PENDING_VERIFICATION"
     elif ctx.decision == "BLOCK":
@@ -171,6 +171,7 @@ def _ctx_to_response(ctx) -> dict:
         "biometric_methods": ["fingerprint", "face", "iris"] if is_biometric else [],
         "status": status,
         "reasons": ctx.reasons,
+        "timestamp": ctx.timestamp,
         "individual_scores": ctx.individual_scores,
         "models_used": ctx.models_used,
         "rules_triggered": [
@@ -256,8 +257,10 @@ async def predict(
                     msg = "This transaction is unusual. Please verify your identity to prevent fraud."
 
                 status = existing.get("status") or (
-                    "PENDING_VERIFICATION" if decision == "REQUIRE_BIOMETRIC" else ("BLOCKED" if decision == "BLOCK" else "ALLOWED")
+                    "PENDING_VERIFICATION" if decision == "VERIFY" else ("BLOCKED" if decision == "BLOCK" else "ALLOWED")
                 )
+
+                timestamp = existing.get("timestamp") or tmp_ctx.timestamp
 
                 resp = {
                     "transaction_id": existing["transaction_id"],
@@ -265,10 +268,11 @@ async def predict(
                     "decision": decision,
                     "risk_level": risk_level,
                     "message": msg,
-                    "requires_biometric": decision == "REQUIRE_BIOMETRIC",
-                    "biometric_methods": ["fingerprint", "face", "iris"] if decision == "REQUIRE_BIOMETRIC" else [],
+                    "requires_biometric": decision == "VERIFY",
+                    "biometric_methods": ["fingerprint", "face", "iris"] if decision == "VERIFY" else [],
                     "status": status,
                     "reasons": reasons,
+                    "timestamp": timestamp,
                     "individual_scores": {},
                     "models_used": [],
                     "rules_triggered": [],
@@ -352,7 +356,7 @@ async def batch_predict(
 
             if ctx.decision == "BLOCK":
                 blocked += 1
-            elif ctx.decision == "REQUIRE_BIOMETRIC":
+            elif ctx.decision == "VERIFY":
                 flagged += 1
             else:
                 allowed += 1

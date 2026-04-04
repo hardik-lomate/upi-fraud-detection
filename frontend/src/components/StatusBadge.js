@@ -5,7 +5,7 @@ function normalizeStatus(txn) {
   const status = String(txn?.status || '').toUpperCase();
 
   if (decision === 'BLOCK' || status === 'BLOCKED') return 'BLOCK';
-  if (decision === 'REQUIRE_BIOMETRIC' || status === 'PENDING_VERIFICATION') return 'VERIFY';
+  if (decision === 'VERIFY' || status === 'PENDING_VERIFICATION') return 'VERIFY';
   if (decision === 'ALLOW' || status === 'ALLOWED' || status === 'VERIFIED') return 'ALLOW';
   return status || decision || 'UNKNOWN';
 }

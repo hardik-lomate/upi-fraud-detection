@@ -191,7 +191,7 @@ def step_decide(ctx: PipelineContext) -> PipelineContext:
         m.startswith("Feature extraction failed") or m.startswith("ML prediction failed")
         for m in (ctx.errors or [])
     ):
-        ctx.decision = "REQUIRE_BIOMETRIC"
+        ctx.decision = "VERIFY"
         ctx.risk_level = "MEDIUM"
         ctx.message = "Verification required due to a processing error."
         ctx.decision_reasons = ["System processing issue"]

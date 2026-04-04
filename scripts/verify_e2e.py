@@ -3,7 +3,7 @@ from datetime import datetime
 import requests
 import sys
 
-BASE = "http://localhost:8000"
+BASE = "http://127.0.0.1:8000"
 PASS = 0
 FAIL = 0
 

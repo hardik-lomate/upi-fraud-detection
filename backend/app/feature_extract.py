@@ -10,6 +10,7 @@ import logging
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 from feature_contract import TXN_TYPE_MAP, NIGHT_HOUR_CUTOFF, WEEKEND_DAY_CUTOFF
 from .history_store import get_sender_history, save_sender_history
+from .database import count_recent_sender_transactions
 from .feature_columns import validate_feature_dict
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,13 @@ def extract_features(txn: dict) -> dict:
         raise ValueError("amount must be > 0")
 
     hist = get_sender_history(sender)
+
+    # Real-time velocity (last 60 seconds) based on persisted DB arrival times.
+    # This avoids relying on client-provided timestamps and survives backend restarts.
+    try:
+        sender_txn_count_60s = int(count_recent_sender_transactions(sender, seconds=60) or 0)
+    except Exception:
+        sender_txn_count_60s = 0
 
     # Cooldown: after a successful verification, temporarily reduce strictness.
     cooldown_active = 0
@@ -130,6 +138,7 @@ def extract_features(txn: dict) -> dict:
 
     # Expose 1h count for rules engine (not a model feature)
     features["_sender_txn_count_1h"] = len(txns_1h)
+    features["_sender_txn_count_60s"] = sender_txn_count_60s
     features["_sender_total_amount_24h"] = sender_total_amount_24h
     features["_cooldown_active"] = cooldown_active
 

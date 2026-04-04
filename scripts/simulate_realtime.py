@@ -4,7 +4,7 @@ import time
 import uuid
 from datetime import datetime
 
-API_URL = "http://localhost:8000/predict"
+API_URL = "http://127.0.0.1:8000/predict"
 
 senders = [f"user{i}@upi" for i in range(100)]
 receivers = [f"merchant{i}@upi" for i in range(200)]

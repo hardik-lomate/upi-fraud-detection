@@ -28,7 +28,7 @@ def app_client():
 def test_biometric_verify_success_updates_transaction(app_client):
     from backend.app.database import SessionLocal, TransactionRecord
 
-    # Fraud score triggers REQUIRE_BIOMETRIC, but still gives a high pass probability.
+    # Fraud score triggers VERIFY, but still gives a high pass probability.
     fraud_score = 0.35
 
     # Medium-risk increments fraud_count by 1, which reduces pass_probability by 0.15.
@@ -56,7 +56,7 @@ def test_biometric_verify_success_updates_transaction(app_client):
         )
         assert r.status_code == 200
         data = r.json()
-        assert data["decision"] == "REQUIRE_BIOMETRIC"
+        assert data["decision"] == "VERIFY"
         assert data["status"] == "PENDING_VERIFICATION"
 
         vr = app_client.post("/verify-biometric", json={"transaction_id": txn_id, "method": "fingerprint"})
@@ -104,7 +104,7 @@ def test_biometric_verify_failure_blocks_and_increments_history(app_client):
         )
         assert r.status_code == 200
         data = r.json()
-        assert data["decision"] == "REQUIRE_BIOMETRIC"
+        assert data["decision"] == "VERIFY"
         assert data["status"] == "PENDING_VERIFICATION"
 
         vr = app_client.post("/verify-biometric", json={"transaction_id": txn_id, "method": "face"})
