@@ -18,7 +18,16 @@ class TransactionGraph:
 
     def add_transaction(self, sender: str, receiver: str, amount: float, timestamp: str = None):
         """Add a transaction edge to the graph."""
-        ts = datetime.fromisoformat(timestamp) if timestamp else datetime.utcnow()
+        if timestamp:
+            try:
+                ts_str = str(timestamp)
+                if ts_str.endswith("Z"):
+                    ts_str = ts_str[:-1] + "+00:00"
+                ts = datetime.fromisoformat(ts_str)
+            except Exception:
+                ts = datetime.utcnow()
+        else:
+            ts = datetime.utcnow()
 
         if self.graph.has_edge(sender, receiver):
             self.graph[sender][receiver]["count"] += 1

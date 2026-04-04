@@ -11,6 +11,8 @@ import json
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
+import os
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +23,28 @@ REDIS_TTL_SECONDS = 7 * 24 * 3600  # 7 days
 
 try:
     import redis
-    _redis_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True,
-                                socket_connect_timeout=2)
+
+    redis_url = os.getenv("REDIS_URL")
+    if redis_url:
+        u = urlparse(redis_url)
+        host = u.hostname or "localhost"
+        port = int(u.port or 6379)
+        db = int((u.path or "/0").lstrip("/") or 0)
+    else:
+        host = os.getenv("REDIS_HOST", "localhost")
+        port = int(os.getenv("REDIS_PORT", "6379"))
+        db = int(os.getenv("REDIS_DB", "0"))
+
+    _redis_client = redis.Redis(
+        host=host,
+        port=port,
+        db=db,
+        decode_responses=True,
+        socket_connect_timeout=2,
+    )
     _redis_client.ping()
     _use_redis = True
-    logger.info("[OK] Redis connected -- using Redis for sender history")
+    logger.info(f"[OK] Redis connected ({host}:{port}/{db}) -- using Redis for sender history")
 except Exception:
     logger.info("[WARN] Redis unavailable -- using in-memory dict with DB fallback")
 

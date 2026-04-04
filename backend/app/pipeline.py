@@ -68,7 +68,19 @@ def step_validate(ctx: PipelineContext, txn_dict: dict) -> PipelineContext:
     ctx.txn_id = txn_dict.get("transaction_id") or (
         f"TXN_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
     )
-    ctx.timestamp = txn_dict.get("timestamp") or datetime.now().isoformat()
+    raw_ts = txn_dict.get("timestamp")
+    if raw_ts:
+        try:
+            ts_str = str(raw_ts)
+            if ts_str.endswith("Z"):
+                ts_str = ts_str[:-1] + "+00:00"
+            parsed = datetime.fromisoformat(ts_str)
+            ctx.timestamp = parsed.isoformat()
+        except Exception:
+            ctx.timestamp = datetime.now().isoformat()
+            ctx.errors.append("Validation warning: invalid timestamp; using server time")
+    else:
+        ctx.timestamp = datetime.now().isoformat()
 
     raw = {**txn_dict, "timestamp": ctx.timestamp}
 
@@ -214,11 +226,16 @@ def step_device_check(ctx: PipelineContext, check_fn, update_fn, sender_history)
 def step_graph_analysis(ctx: PipelineContext, graph) -> PipelineContext:
     """Step 7: Graph-based network analysis."""
     try:
+        sender = (ctx.raw_txn.get("sender_upi") or "").strip()
+        receiver = (ctx.raw_txn.get("receiver_upi") or "").strip()
+        if not sender or not receiver:
+            ctx.processing_steps.append("graph_analysis")
+            return ctx
         graph.add_transaction(
-            ctx.raw_txn["sender_upi"], ctx.raw_txn["receiver_upi"],
+            sender, receiver,
             ctx.raw_txn["amount"], ctx.timestamp,
         )
-        ctx.graph_info = graph.get_node_features(ctx.raw_txn["sender_upi"])
+        ctx.graph_info = graph.get_node_features(sender)
 
         ctx.processing_steps.append("graph_analysis")
     except Exception as e:
