@@ -8,20 +8,27 @@ function pick(arr) {
 
 export function generateTransactionInput() {
   // Backend requires these fields; UI intentionally does NOT ask the user.
-  const senders = ['alice@upi', 'bob@upi', 'charlie@upi', 'repeat@upi'];
-  const receivers = ['merchant@upi', 'shop@upi', 'wallet@upi', 'billpay@upi'];
+  // Use a wide sender pool so the 24h cumulative limit rule doesn't
+  // quickly block everything during fast demo simulation.
+  const stableSenders = ['alice@upi', 'bob@upi', 'charlie@upi', 'repeat@upi'];
+  const dynamicSender = `user${randInt(100, 999)}@upi`;
+  const sender_upi = Math.random() < 0.25 ? pick(stableSenders) : dynamicSender;
 
-  const sender_upi = pick(senders);
+  const receivers = ['merchant@upi', 'shop@upi', 'wallet@upi', 'billpay@upi', 'tax@upi', 'insurance@upi'];
   const receiver_upi = pick(receivers);
 
-  // Bias amounts to produce a mix of safe + verify flows.
-  const amount = Math.random() < 0.25 ? randInt(26000, 80000) : randInt(50, 8000);
+  // Mostly small day-to-day amounts, with occasional step-up triggers.
+  // Keep the high-value range modest to avoid tripping hard-block rules.
+  const roll = Math.random();
+  const amount = roll < 0.08 ? randInt(26000, 42000) : roll < 0.25 ? randInt(8000, 18000) : randInt(50, 6000);
 
-  // New device occasionally to trigger step-up rules.
-  const deviceSuffix = randInt(100, 999);
-  const sender_device_id = Math.random() < 0.55 ? `WEB_DEMO_NEW_${deviceSuffix}` : 'WEB_DEMO_KNOWN';
+  // Device behavior: stable device most of the time; occasional new device
+  // on higher-value payments to trigger VERIFY.
+  const stableDevice = `WEB_${sender_upi.replace(/[^a-z0-9]/gi, '_')}_KNOWN`;
+  const newDevice = `WEB_${sender_upi.replace(/[^a-z0-9]/gi, '_')}_NEW_${randInt(100, 999)}`;
+  const sender_device_id = amount >= 26000 ? (Math.random() < 0.65 ? newDevice : stableDevice) : stableDevice;
 
-  const transaction_type = pick(['purchase', 'transfer', 'bill_payment', 'recharge']);
+  const transaction_type = pick(['purchase', 'purchase', 'transfer', 'bill_payment', 'recharge']);
 
   return {
     sender_upi,
