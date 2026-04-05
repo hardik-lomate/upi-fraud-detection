@@ -6,27 +6,69 @@ function pick(arr) {
   return arr[randInt(0, arr.length - 1)];
 }
 
-export function generateTransactionInput() {
-  // Backend requires these fields; UI intentionally does NOT ask the user.
-  // Use a wide sender pool so the 24h cumulative limit rule doesn't
-  // quickly block everything during fast demo simulation.
-  const stableSenders = ['alice@upi', 'bob@upi', 'charlie@upi', 'repeat@upi'];
-  const dynamicSender = `user${randInt(100, 999)}@upi`;
-  const sender_upi = Math.random() < 0.25 ? pick(stableSenders) : dynamicSender;
+function stableHash(value) {
+  const str = String(value || '');
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
 
-  const receivers = ['merchant@upi', 'shop@upi', 'wallet@upi', 'billpay@upi', 'tax@upi', 'insurance@upi'];
-  const receiver_upi = pick(receivers);
+const PROFILE_CONFIG = {
+  normal: { highRiskChance: 0.09, knownSenderChance: 0.35 },
+  peak: { highRiskChance: 0.14, knownSenderChance: 0.45 },
+  stress: { highRiskChance: 0.21, knownSenderChance: 0.5 },
+};
 
-  // Mostly small day-to-day amounts, with occasional step-up triggers.
-  // Keep the high-value range modest to avoid tripping hard-block rules.
+const STABLE_SENDERS = ['alice@upi', 'bob@upi', 'charlie@upi', 'repeat@upi', 'salary_user@upi'];
+const RECEIVERS = [
+  'merchant@upi',
+  'shop@upi',
+  'wallet@upi',
+  'billpay@upi',
+  'tax@upi',
+  'insurance@upi',
+  'fuel@upi',
+  'hospital@upi',
+];
+
+function amountForProfile(profile) {
   const roll = Math.random();
-  const amount = roll < 0.08 ? randInt(26000, 42000) : roll < 0.25 ? randInt(8000, 18000) : randInt(50, 6000);
+  if (profile === 'stress') {
+    if (roll < 0.5) return randInt(80, 4500);
+    if (roll < 0.82) return randInt(4500, 25000);
+    return randInt(25000, 180000);
+  }
+  if (profile === 'peak') {
+    if (roll < 0.6) return randInt(80, 6500);
+    if (roll < 0.87) return randInt(6500, 28000);
+    return randInt(28000, 125000);
+  }
+  if (roll < 0.72) return randInt(60, 5000);
+  if (roll < 0.93) return randInt(5000, 22000);
+  return randInt(22000, 80000);
+}
 
-  // Device behavior: stable device most of the time; occasional new device
-  // on higher-value payments to trigger VERIFY.
+export function generateTransactionInput(options = {}) {
+  const profile = PROFILE_CONFIG[options.profile] ? options.profile : 'normal';
+  const cfg = PROFILE_CONFIG[profile];
+
+  const dynamicSender = `user${randInt(100, 999)}@upi`;
+  const sender_upi = Math.random() < cfg.knownSenderChance ? pick(STABLE_SENDERS) : dynamicSender;
+  const receiver_upi = pick(RECEIVERS);
+  const amount = amountForProfile(profile);
+
   const stableDevice = `WEB_${sender_upi.replace(/[^a-z0-9]/gi, '_')}_KNOWN`;
   const newDevice = `WEB_${sender_upi.replace(/[^a-z0-9]/gi, '_')}_NEW_${randInt(100, 999)}`;
-  const sender_device_id = amount >= 26000 ? (Math.random() < 0.65 ? newDevice : stableDevice) : stableDevice;
+
+  let sender_device_id = stableDevice;
+  if (amount >= 25000 && Math.random() < 0.55) {
+    sender_device_id = newDevice;
+  }
+  if (profile === 'stress' && Math.random() < cfg.highRiskChance) {
+    sender_device_id = newDevice;
+  }
 
   const transaction_type = pick(['purchase', 'purchase', 'transfer', 'bill_payment', 'recharge']);
 
@@ -40,37 +82,43 @@ export function generateTransactionInput() {
 }
 
 export function simulatePredictFallback(input) {
-  const fraud_score = Math.max(0, Math.min(1, (input.amount / 90000) + Math.random() * 0.2));
+  const key = [input.sender_upi, input.receiver_upi, input.amount, input.transaction_type, input.sender_device_id].join('|');
+  const h = stableHash(key);
+  const base = input.amount >= 25000 ? 0.34 : input.amount >= 9000 ? 0.22 : 0.08;
+  const noise = ((h % 281) / 1000); // deterministic 0.000 - 0.280
+  const fraud_score = Math.max(0, Math.min(1, base + noise));
 
   let decision = 'ALLOW';
   let status = 'ALLOWED';
-  let message = 'Transaction appears legitimate. Approved.';
+  let message = 'Approved.';
 
   if (fraud_score >= 0.3 && fraud_score <= 0.7) {
-    decision = 'REQUIRE_BIOMETRIC';
-    status = 'PENDING_VERIFICATION';
-    message = 'Suspicious activity detected. Biometric verification required to proceed.';
+    decision = 'VERIFY';
+    status = 'PENDING';
+    message = 'Verification required.';
   }
 
   if (fraud_score > 0.7) {
-    decision = 'REQUIRE_BIOMETRIC';
-    status = 'PENDING_VERIFICATION';
-    message = 'High risk detected. Biometric verification required before transaction can proceed.';
+    decision = 'BLOCK';
+    status = 'BLOCKED';
+    message = 'Blocked for safety.';
   }
 
-  const transaction_id = `SIM_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+  const transaction_id = `SIM_${h.toString(16).slice(0, 12)}`;
+
+  const reasons = [];
+  if (input.amount >= 25000) reasons.push('High transaction amount');
+  if ((input.sender_device_id || '').includes('_NEW_')) reasons.push('New device');
+  if (reasons.length === 0) reasons.push('No strong anomaly detected');
 
   return {
     transaction_id,
     fraud_score,
+    risk_score: fraud_score,
     decision,
     status,
     message,
-    reasons: fraud_score > 0.7
-      ? ['↑ amount', '↑ new_device', '↑ unusual_timing']
-      : fraud_score >= 0.3
-      ? ['↑ new_device', '↑ amount_deviation']
-      : ['↓ typical_amount', '↓ known_pattern'],
+    reasons,
     models_used: ['simulated'],
     model_version: 'demo',
     timestamp: new Date().toISOString(),
@@ -78,7 +126,9 @@ export function simulatePredictFallback(input) {
 }
 
 export function simulateVerifyFallback(txn) {
-  const pass = Math.random() < (txn.fraud_score < 0.6 ? 0.8 : 0.45);
+  const h = stableHash(txn?.transaction_id || '');
+  const threshold = txn.fraud_score < 0.6 ? 80 : 45;
+  const pass = (h % 100) < threshold;
   return {
     transaction_id: txn.transaction_id,
     verification_status: pass ? 'VERIFIED' : 'FAILED',

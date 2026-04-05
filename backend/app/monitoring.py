@@ -17,6 +17,9 @@ from feature_contract import THRESHOLD_FLAG, THRESHOLD_BLOCK
 WINDOW_SIZE = 1000
 prediction_window = deque(maxlen=WINDOW_SIZE)
 
+LATENCY_WINDOW_SIZE = 2000
+latency_window = deque(maxlen=LATENCY_WINDOW_SIZE)
+
 # Reference distribution from training (populated on startup)
 reference_distribution = None
 
@@ -31,6 +34,41 @@ def record_prediction(fraud_score: float, features: dict):
         "features": features,
         "timestamp": datetime.utcnow().isoformat(),
     })
+
+
+def record_latency(latency_ms: float, cache_hit: bool = False):
+    """Record API processing latency for performance tracking."""
+    latency_window.append(
+        {
+            "latency_ms": float(latency_ms),
+            "cache_hit": bool(cache_hit),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+
+
+def get_latency_stats() -> dict:
+    """Return rolling latency statistics (avg/max/p95)."""
+    if not latency_window:
+        return {
+            "total": 0,
+            "avg_latency_ms": 0.0,
+            "max_latency_ms": 0.0,
+            "p95_latency_ms": 0.0,
+            "cache_hit_rate_pct": 0.0,
+        }
+
+    values = np.array([item["latency_ms"] for item in latency_window], dtype=float)
+    cache_hits = sum(1 for item in latency_window if item.get("cache_hit"))
+
+    return {
+        "total": int(len(values)),
+        "avg_latency_ms": round(float(values.mean()), 2),
+        "max_latency_ms": round(float(values.max()), 2),
+        "p95_latency_ms": round(float(np.percentile(values, 95)), 2),
+        "cache_hit_rate_pct": round((cache_hits / len(values)) * 100, 2),
+        "target_latency_ms": 200.0,
+    }
 
 
 def compute_psi(expected: np.ndarray, actual: np.ndarray, bins: int = 10) -> float:

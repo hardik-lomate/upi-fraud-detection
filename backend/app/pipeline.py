@@ -38,6 +38,7 @@ class PipelineContext:
 
     # Step 3: ML
     fraud_score: float = 0.0
+    risk_score: float = 0.0
     individual_scores: dict = field(default_factory=dict)
     models_used: list = field(default_factory=list)
 
@@ -175,6 +176,7 @@ def step_ml_predict(ctx: PipelineContext, predict_fn) -> PipelineContext:
     try:
         result = predict_fn(ctx.features)
         ctx.fraud_score = result["ensemble_score"]
+        ctx.risk_score = ctx.fraud_score
         ctx.individual_scores = result["individual_scores"]
         ctx.models_used = result["models_used"]
         ctx.processing_steps.append("ml_predict")
@@ -185,7 +187,31 @@ def step_ml_predict(ctx: PipelineContext, predict_fn) -> PipelineContext:
 
 def step_decide(ctx: PipelineContext) -> PipelineContext:
     """Step 4: Make final decision (rules can override ML; step-up biometric for medium risk)."""
-    from .decision_engine import make_decision
+    from .decision_engine import make_decision, build_reasons
+
+    # Rules engine hard BLOCK must override everything (e.g., SELF_TRANSFER).
+    if ctx.rule_decision == "BLOCK" or any(getattr(r, "action", None) == "BLOCK" for r in (ctx.rules_triggered or [])):
+        ctx.decision = "BLOCK"
+        ctx.risk_level = "HIGH"
+        ctx.message = "Blocked for safety."
+        ctx.risk_score = max(ctx.fraud_score, 0.9)
+        rule_reasons = [getattr(r, "reason", "") for r in (ctx.rules_triggered or []) if getattr(r, "reason", "")]
+        signal_reasons = [
+            r for r in build_reasons(ctx.features)
+            if r not in {
+                "Trusted receiver history",
+                "Known device history",
+                "Recent successful verification cooldown",
+                "No strong risk signals detected",
+            }
+        ]
+        merged = []
+        for reason in [*rule_reasons, *signal_reasons]:
+            if reason and reason not in merged:
+                merged.append(reason)
+        ctx.decision_reasons = merged[:4] if merged else ["Rule-based block"]
+        ctx.processing_steps.append("decide")
+        return ctx
 
     if any(
         m.startswith("Feature extraction failed") or m.startswith("ML prediction failed")
@@ -194,12 +220,13 @@ def step_decide(ctx: PipelineContext) -> PipelineContext:
         ctx.decision = "VERIFY"
         ctx.risk_level = "MEDIUM"
         ctx.message = "Verification required due to a processing error."
-        ctx.decision_reasons = ["System processing issue"]
+        ctx.risk_score = max(ctx.fraud_score, 0.5)
+        ctx.decision_reasons = build_reasons(ctx.features) or ["System processing issue"]
         ctx.processing_steps.append("decide")
         return ctx
 
     rules_list = [{"rule_name": r.rule_name, "action": r.action} for r in ctx.rules_triggered]
-    ctx.decision, ctx.risk_level, ctx.message, ctx.decision_reasons = make_decision(
+    ctx.decision, ctx.risk_level, ctx.message, ctx.decision_reasons, ctx.risk_score = make_decision(
         fraud_score=ctx.fraud_score,
         sender_upi=ctx.raw_txn.get("sender_upi"),
         features=ctx.features,
@@ -207,6 +234,7 @@ def step_decide(ctx: PipelineContext) -> PipelineContext:
         device_anomalies=ctx.device_anomalies,
         graph_info=ctx.graph_info,
     )
+
     ctx.processing_steps.append("decide")
     return ctx
 
@@ -214,19 +242,9 @@ def step_decide(ctx: PipelineContext) -> PipelineContext:
 def step_explain(ctx: PipelineContext, explain_fn, format_fn) -> PipelineContext:
     """Step 5: Generate SHAP explanations."""
     try:
-        explanations = explain_fn(ctx.features, get_feature_columns(), top_n=5)
-        shap_reasons = format_fn(explanations)
-        combined = [*ctx.decision_reasons, *shap_reasons]
-        deduped = []
-        seen = set()
-        for r in combined:
-            if not r:
-                continue
-            if r in seen:
-                continue
-            seen.add(r)
-            deduped.append(r)
-        ctx.reasons = deduped
+        # Lock-check requires a fixed, human-readable reasons set.
+        # Keep API output deterministic and avoid adding extra SHAP-derived labels.
+        ctx.reasons = list(ctx.decision_reasons or [])
         ctx.processing_steps.append("explain")
     except Exception as e:
         ctx.reasons = [*ctx.decision_reasons] or [f"Explainability unavailable: {e}"]

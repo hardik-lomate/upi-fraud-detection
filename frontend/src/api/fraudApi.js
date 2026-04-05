@@ -27,3 +27,17 @@ export async function fetchMonitoringStats() {
   const res = await api.get('/monitoring/stats');
   return res.data;
 }
+
+export async function submitFeedback(transactionId, analystVerdict, analystNotes = '') {
+  const res = await api.post('/feedback', {
+    transaction_id: transactionId,
+    analyst_verdict: analystVerdict,
+    analyst_notes: analystNotes,
+  });
+  return res.data;
+}
+
+export async function fetchFeedbackStats() {
+  const res = await api.get('/feedback/stats');
+  return res.data;
+}

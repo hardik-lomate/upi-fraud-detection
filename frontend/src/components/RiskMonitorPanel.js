@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { fetchFlaggedUsers } from '../api/fraudApi';
+import { fetchFeedbackStats, fetchFlaggedUsers, fetchMonitoringStats } from '../api/fraudApi';
 
 function formatTime(iso) {
   if (!iso) return '—';
@@ -11,6 +11,8 @@ function formatTime(iso) {
 export default function RiskMonitorPanel({ apiOnline }) {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState([]);
+  const [monitor, setMonitor] = useState(null);
+  const [feedback, setFeedback] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -26,13 +28,21 @@ export default function RiskMonitorPanel({ apiOnline }) {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetchFlaggedUsers(50);
+        const [flaggedRes, monitorRes, feedbackRes] = await Promise.all([
+          fetchFlaggedUsers(50),
+          fetchMonitoringStats(),
+          fetchFeedbackStats(),
+        ]);
         if (!alive) return;
-        setRows(Array.isArray(res?.flagged_users) ? res.flagged_users : []);
+        setRows(Array.isArray(flaggedRes?.flagged_users) ? flaggedRes.flagged_users : []);
+        setMonitor(monitorRes || null);
+        setFeedback(feedbackRes || null);
       } catch {
         if (!alive) return;
         setError('Unable to load flagged users.');
         setRows([]);
+        setMonitor(null);
+        setFeedback(null);
       } finally {
         if (alive) setLoading(false);
       }
@@ -46,23 +56,51 @@ export default function RiskMonitorPanel({ apiOnline }) {
     };
   }, [apiOnline]);
 
+  const summaryCards = [
+    {
+      title: 'Predictions Seen',
+      value: monitor?.total ?? 0,
+    },
+    {
+      title: 'Fraud Rate',
+      value: `${monitor?.fraud_rate_pct ?? 0}%`,
+    },
+    {
+      title: 'Mean Risk Score',
+      value: monitor?.mean_score != null ? `${(Number(monitor.mean_score) * 100).toFixed(1)}%` : '0.0%',
+    },
+    {
+      title: 'Feedback Records',
+      value: feedback?.total_feedback ?? 0,
+    },
+  ];
+
   return (
-    <section className="rounded-xl border border-border bg-surface">
-      <div className="flex items-center justify-between px-4 py-3">
+    <section className="panel fade-in">
+      <div className="flex items-center justify-between px-5 py-4">
         <div>
-          <div className="text-sm font-semibold text-textPrimary">Flagged Users</div>
-          <div className="mt-0.5 text-xs text-textSecondary">Accounts with fraud history</div>
+          <div className="panel-title">Risk Intelligence</div>
+          <div className="mt-1 text-xs text-textSecondary">Live model health, analyst feedback loop, and flagged entities</div>
         </div>
-        {loading ? <div className="text-xs text-textSecondary">Refreshing…</div> : null}
+        {loading ? <div className="font-mono text-xs text-textSecondary">REFRESHING</div> : null}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 border-t border-border/80 px-5 py-4 md:grid-cols-4">
+        {summaryCards.map((card) => (
+          <div key={card.title} className="rounded-xl border border-border/80 bg-bg/35 px-3 py-3">
+            <div className="text-[11px] uppercase tracking-[0.12em] text-textSecondary">{card.title}</div>
+            <div className="mt-1 font-mono text-xl font-semibold text-textPrimary">{card.value}</div>
+          </div>
+        ))}
       </div>
 
       {error ? (
-        <div className="border-t border-border px-4 py-4 text-sm text-textSecondary">{error}</div>
+        <div className="border-t border-border/80 px-5 py-4 text-sm text-textSecondary">{error}</div>
       ) : (
-        <div className="overflow-auto border-t border-border">
+        <div className="overflow-auto border-t border-border/80">
           <table className="w-full text-left">
-            <thead className="bg-bg/30 text-xs font-medium text-textSecondary">
-              <tr className="border-b border-border">
+            <thead className="bg-bg/30 text-xs font-medium uppercase tracking-[0.1em] text-textSecondary">
+              <tr className="border-b border-border/80">
                 <th className="px-4 py-2">UPI</th>
                 <th className="w-[120px] px-4 py-2">Fraud Count</th>
                 <th className="w-[120px] px-4 py-2">Blocked</th>
@@ -80,8 +118,8 @@ export default function RiskMonitorPanel({ apiOnline }) {
                 rows.map((u) => (
                   <tr key={u.upi_id} className="hover:bg-bg/25">
                     <td className="px-4 py-2 font-medium text-textPrimary">{u.upi_id}</td>
-                    <td className="px-4 py-2 text-textSecondary tabular-nums">{u.fraud_count ?? 0}</td>
-                    <td className="px-4 py-2 text-textSecondary tabular-nums">{u.block_count ?? 0}</td>
+                    <td className="px-4 py-2 font-mono text-textSecondary">{u.fraud_count ?? 0}</td>
+                    <td className="px-4 py-2 font-mono text-textSecondary">{u.block_count ?? 0}</td>
                     <td className="px-4 py-2 text-xs text-textSecondary">{formatTime(u.last_fraud_at)}</td>
                   </tr>
                 ))

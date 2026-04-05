@@ -100,7 +100,7 @@ def run_demo():
             r = requests.post(f"{API_URL}/predict", json=scenario["payload"], timeout=10)
             if r.status_code == 200:
                 data = r.json()
-                color = {"ALLOW": "🟢", "FLAG": "🟡", "BLOCK": "🔴"}.get(data["decision"], "⚪")
+                color = {"ALLOW": "🟢", "VERIFY": "🟡", "BLOCK": "🔴"}.get(data["decision"], "⚪")
                 print(f"  {color} Decision: {data['decision']}  Score: {data['fraud_score']:.1%}  Risk: {data['risk_level']}")
 
                 if data.get("rules_triggered"):

@@ -7,6 +7,7 @@ Not random — uses rule-based decisions for demo predictability.
 
 import time
 import hashlib
+import os
 from datetime import datetime
 from .database import (
     update_transaction_status, get_user_fraud_history,
@@ -17,8 +18,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Simulated verification delay (seconds)
-VERIFICATION_DELAY = 1.5
+# Configurable verification delay (seconds). Default 0 for deterministic fast demos.
+VERIFICATION_DELAY = float(os.getenv("BIOMETRIC_DELAY_SEC", "0"))
 
 
 def _get_transaction(txn_id: str) -> dict:
@@ -53,8 +54,8 @@ def verify_biometric(transaction_id: str, method: str = "fingerprint") -> dict:
 
     Uses transaction_id hash for reproducible results in demos.
     """
-    # Simulate processing time
-    time.sleep(VERIFICATION_DELAY)
+    if VERIFICATION_DELAY > 0:
+        time.sleep(VERIFICATION_DELAY)
 
     txn = _get_transaction(transaction_id)
     if not txn:

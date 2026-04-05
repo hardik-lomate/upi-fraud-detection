@@ -27,6 +27,17 @@ FEATURE_COLUMNS = [
     "is_new_receiver",
 ]
 
+# Extended features for v3.0 — used by feature store, not in base model input
+EXTENDED_FEATURES = [
+    "sender_velocity_1min",
+    "sender_velocity_5min",
+    "vpa_suffix_risk_score",
+    "upi_age_days",
+    "receiver_new_sender_ratio_24h",
+    "amount_percentile_sender",
+    "cross_bank_ratio",
+]
+
 # ======================================================================
 # TRANSACTION TYPE ENCODING — alphabetical to match LabelEncoder
 # ======================================================================
@@ -54,9 +65,24 @@ THRESHOLD_BLOCK = 0.7       # score >= 0.7 → BLOCK
 # ======================================================================
 # MODEL CONFIG
 # ======================================================================
-MODEL_VERSION = "2.0.0"
+MODEL_VERSION = "3.0.0"
 ENSEMBLE_DEFAULTS = {
-    "xgboost": 0.45,
-    "lightgbm": 0.35,
-    "isolation_forest": 0.20,
+    "xgboost": 0.30,
+    "lightgbm": 0.30,
+    "catboost": 0.25,
+    "isolation_forest": 0.15,
+}
+
+# ======================================================================
+# NPCI FRAUD TAXONOMY — maps decisions to official fraud type codes
+# ======================================================================
+NPCI_TAXONOMY = {
+    "ALLOW": "Legitimate",
+    "VERIFY_MEDIUM": "Social Engineering Suspect",
+    "VERIFY_HIGH": "UPI Credential Theft Suspect",
+    "BLOCK_VELOCITY": "Technical Fraud — Velocity Attack",
+    "BLOCK_MULE": "Money Mule Network",
+    "BLOCK_DEVICE": "Device Compromise",
+    "BLOCK_RULES": "Rule-Based Block",
+    "BLOCK_ML": "ML-Detected Anomaly",
 }

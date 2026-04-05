@@ -2,19 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
+
 :root {
   color-scheme: dark;
 
-  /* Palette (RGB triplets) */
-  --c-bg: 11 15 20;            /* #0B0F14 */
-  --c-surface: 18 24 33;       /* #121821 */
-  --c-primary: 37 99 235;      /* #2563EB */
-  --c-text-primary: 229 231 235;   /* #E5E7EB */
-  --c-text-secondary: 156 163 175; /* #9CA3AF */
-  --c-success: 22 163 74;      /* #16A34A */
-  --c-warning: 217 119 6;      /* #D97706 */
-  --c-danger: 220 38 38;       /* #DC2626 */
-  --c-border: 31 41 55;        /* #1F2937 */
+  /* Deep-Space Dark Palette */
+  --c-bg: 10 11 15;
+  --c-surface: 16 18 26;
+  --c-card: 22 25 37;
+  --c-elevated: 30 34 53;
+  --c-hover: 37 42 64;
+  --c-accent: 108 71 255;
+  --c-accent-light: 139 111 255;
+  --c-accent-dark: 61 31 204;
+  --c-accent-bg: 26 15 64;
+  --c-text-primary: 240 240 255;
+  --c-text-secondary: 139 143 173;
+  --c-text-muted: 74 78 107;
+  --c-safe: 0 201 167;
+  --c-warn: 239 159 39;
+  --c-danger: 226 75 74;
+  --c-info: 55 138 221;
+  --c-verify: 180 124 255;
+  --c-border-subtle: 30 34 53;
+  --c-border: 37 42 64;
+  --c-border-strong: 58 63 92;
+
+  /* Legacy compatibility aliases */
+  --c-primary: 108 71 255;
+  --c-success: 0 201 167;
+  --c-warning: 239 159 39;
 }
 
 html, body, #root {
@@ -23,4 +41,216 @@ html, body, #root {
 
 body {
   @apply bg-bg text-textPrimary font-sans antialiased;
+  background-image:
+    radial-gradient(1200px 500px at 100% -10%, rgba(108, 71, 255, 0.08), transparent 60%),
+    radial-gradient(900px 420px at 0% 100%, rgba(0, 201, 167, 0.05), transparent 62%),
+    linear-gradient(180deg, rgba(10, 11, 15, 0.98), rgba(10, 11, 15, 1));
+}
+
+* {
+  scrollbar-color: rgba(108, 71, 255, 0.35) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(108, 71, 255, 0.3);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-shell {
+  @apply min-h-screen;
+  background-image:
+    radial-gradient(circle at 50% 0%, rgba(108, 71, 255, 0.03) 0%, transparent 50%),
+    linear-gradient(to right, rgba(108, 71, 255, 0.02) 1px, transparent 1px);
+  background-size: 100% 100%, 48px 48px;
+}
+
+.panel {
+  @apply rounded-2xl border border-border/80 bg-surface/80 shadow-panel backdrop-blur;
+}
+
+.panel-title {
+  @apply font-display text-sm font-semibold tracking-wide text-textPrimary;
+}
+
+.kpi-value {
+  @apply font-mono text-2xl font-semibold tracking-tight text-textPrimary;
+}
+
+.kpi-caption {
+  @apply text-xs uppercase tracking-[0.14em] text-textSecondary;
+}
+
+/* Icon Rail Sidebar */
+.sidebar-rail {
+  width: 64px;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-rail:hover,
+.sidebar-rail.expanded {
+  width: 240px;
+}
+
+.sidebar-rail .nav-label {
+  opacity: 0;
+  transform: translateX(-8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  white-space: nowrap;
+}
+
+.sidebar-rail:hover .nav-label,
+.sidebar-rail.expanded .nav-label {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.sidebar-rail .brand-text {
+  opacity: 0;
+  max-width: 0;
+  overflow: hidden;
+  transition: opacity 0.25s ease, max-width 0.3s ease;
+}
+
+.sidebar-rail:hover .brand-text,
+.sidebar-rail.expanded .brand-text {
+  opacity: 1;
+  max-width: 200px;
+}
+
+/* Active nav glow */
+.nav-active-glow {
+  box-shadow: 0 0 20px rgba(108, 71, 255, 0.25), inset 0 0 12px rgba(108, 71, 255, 0.1);
+}
+
+/* Glass effect */
+.glass {
+  background: rgba(16, 18, 26, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(108, 71, 255, 0.08);
+}
+
+/* Gauge animation */
+@keyframes gaugeArc {
+  from { stroke-dashoffset: var(--gauge-circumference, 283); }
+  to { stroke-dashoffset: var(--gauge-offset, 283); }
+}
+
+.gauge-arc-animated {
+  animation: gaugeArc 1.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Fade animations */
+.fade-in {
+  animation: fadeIn 0.45s ease-out both;
+}
+
+.stagger-1 { animation-delay: 0.04s; }
+.stagger-2 { animation-delay: 0.08s; }
+.stagger-3 { animation-delay: 0.12s; }
+.stagger-4 { animation-delay: 0.16s; }
+.stagger-5 { animation-delay: 0.20s; }
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(108, 71, 255, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(108, 71, 255, 0.6); }
+}
+
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Risk band borders */
+.risk-band-high { border-left: 3px solid rgb(226, 75, 74); }
+.risk-band-medium { border-left: 3px solid rgb(239, 159, 39); }
+.risk-band-low { border-left: 3px solid rgb(0, 201, 167); }
+
+/* Badge */
+.badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.badge-dot-safe { background: rgb(0, 201, 167); }
+.badge-dot-warn { background: rgb(239, 159, 39); }
+.badge-dot-danger { background: rgb(226, 75, 74); }
+
+/* Tooltip */
+.tooltip-container {
+  position: relative;
+}
+
+.tooltip-container .tooltip-text {
+  visibility: hidden;
+  opacity: 0;
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(22, 25, 37, 0.95);
+  border: 1px solid rgba(108, 71, 255, 0.2);
+  color: rgb(240, 240, 255);
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 50;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+.tooltip-container:hover .tooltip-text {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* D3 Network Graph */
+.graph-node {
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.graph-node:hover {
+  opacity: 0.8;
+}
+
+.graph-link {
+  stroke-opacity: 0.4;
+  transition: stroke-opacity 0.2s;
+}
+
+.graph-link:hover {
+  stroke-opacity: 0.9;
 }

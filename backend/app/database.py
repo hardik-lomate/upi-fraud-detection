@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
@@ -40,6 +40,7 @@ class TransactionRecord(Base):
     status = Column(String(32), default="ALLOWED")  # ALLOWED, BLOCKED, PENDING_VERIFICATION, VERIFIED
     device_id = Column(String(64), default="")
     timestamp = Column(String(32))
+    response_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -59,6 +60,18 @@ class FraudHistory(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+
+    # Lightweight schema migration (SQLite): add response_json if missing.
+    # This enables deterministic idempotent reads of the full API response.
+    if DATABASE_URL.startswith("sqlite"):
+        try:
+            with engine.connect() as conn:
+                cols = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(transactions)").fetchall()]
+                if "response_json" not in cols:
+                    conn.exec_driver_sql("ALTER TABLE transactions ADD COLUMN response_json TEXT")
+        except Exception as e:
+            logger.warning(f"DB migration skipped/failed: {e}")
+
     # Lightweight value migration for demo stability
     db = SessionLocal()
     try:
@@ -74,7 +87,18 @@ def init_db():
     print("Database initialized")
 
 
-def save_transaction(txn_id, sender, receiver, amount, fraud_score, decision, timestamp, device_id="", status=None):
+def save_transaction(
+    txn_id,
+    sender,
+    receiver,
+    amount,
+    fraud_score,
+    decision,
+    timestamp,
+    device_id="",
+    status=None,
+    response_json: Optional[str] = None,
+):
     db = SessionLocal()
     try:
         # Determine status from decision if not explicitly set
@@ -95,6 +119,7 @@ def save_transaction(txn_id, sender, receiver, amount, fraud_score, decision, ti
             status=status,
             device_id=device_id,
             timestamp=timestamp,
+            response_json=response_json,
         )
         db.add(record)
         try:
@@ -112,6 +137,7 @@ def save_transaction(txn_id, sender, receiver, amount, fraud_score, decision, ti
                 existing.status = status
                 existing.device_id = device_id
                 existing.timestamp = timestamp
+                existing.response_json = response_json
                 db.commit()
     finally:
         db.close()
@@ -133,6 +159,7 @@ def get_transaction_by_id(txn_id: str) -> Optional[dict]:
             "status": r.status,
             "timestamp": r.timestamp,
             "device_id": r.device_id or "",
+            "response_json": r.response_json,
         }
     finally:
         db.close()

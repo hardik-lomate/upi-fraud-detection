@@ -56,9 +56,11 @@ def extract_features(txn: dict) -> dict:
     # Real-time velocity (last 60 seconds) based on persisted DB arrival times.
     # This avoids relying on client-provided timestamps and survives backend restarts.
     try:
-        sender_txn_count_60s = int(count_recent_sender_transactions(sender, seconds=60) or 0)
+        # Include current in-flight transaction so thresholds are intuitive:
+        # 5 txns/min means the 5th one is already considered high velocity.
+        sender_txn_count_60s = int(count_recent_sender_transactions(sender, seconds=60) or 0) + 1
     except Exception:
-        sender_txn_count_60s = 0
+        sender_txn_count_60s = 1
 
     # Cooldown: after a successful verification, temporarily reduce strictness.
     cooldown_active = 0
@@ -141,5 +143,6 @@ def extract_features(txn: dict) -> dict:
     features["_sender_txn_count_60s"] = sender_txn_count_60s
     features["_sender_total_amount_24h"] = sender_total_amount_24h
     features["_cooldown_active"] = cooldown_active
+    features["_transaction_type"] = txn.get("transaction_type") or "purchase"
 
     return features

@@ -35,31 +35,32 @@ export default function BiometricModal({ open, txn, onClose, onVerify }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-      <div className="w-full max-w-md rounded-xl border border-border bg-surface shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-2xl border border-border/80 bg-surface shadow-2xl">
         <div className="px-5 py-4">
-          <div className="text-sm font-semibold text-textPrimary">Identity Verification Required</div>
+          <div className="text-[11px] uppercase tracking-[0.14em] text-textSecondary">Step-up Authentication</div>
+          <div className="mt-1 font-display text-base font-semibold text-textPrimary">Identity Verification Required</div>
           <div className="mt-1 text-sm text-textSecondary">
             {txn?.message || 'This transaction requires biometric verification before it can proceed.'}
           </div>
         </div>
 
-        <div className="border-t border-border px-5 py-4">
+        <div className="border-t border-border/80 px-5 py-4">
           <div className="text-xs text-textSecondary">Transaction</div>
-          <div className="mt-1 text-sm font-medium text-textPrimary">{txn?.transaction_id || '—'}</div>
+          <div className="mt-1 font-mono text-xs text-textPrimary">{txn?.transaction_id || '—'}</div>
 
           <div className="mt-3 text-sm text-textSecondary">
             Method: <span className="font-medium text-textPrimary">Fingerprint</span>
           </div>
 
           {result?.message ? (
-            <div className="mt-3 rounded-md border border-border bg-bg/30 px-3 py-2 text-sm text-textPrimary">
+            <div className="mt-3 rounded-lg border border-border/80 bg-bg/35 px-3 py-2 text-sm text-textPrimary">
               {result.message}
             </div>
           ) : null}
 
           {error ? (
-            <div className="mt-3 rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
+            <div className="mt-3 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
               {error}
             </div>
           ) : null}
@@ -69,11 +70,11 @@ export default function BiometricModal({ open, txn, onClose, onVerify }) {
           ) : null}
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
+        <div className="flex items-center justify-end gap-2 border-t border-border/80 px-5 py-4">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-3 py-2 text-sm font-medium text-textSecondary hover:bg-bg/20 hover:text-textPrimary"
+            className="rounded-lg px-3 py-2 text-sm font-medium text-textSecondary transition hover:bg-bg/30 hover:text-textPrimary"
           >
             Cancel
           </button>
@@ -81,7 +82,7 @@ export default function BiometricModal({ open, txn, onClose, onVerify }) {
             type="button"
             onClick={handleVerify}
             disabled={!needsVerification || submitting}
-            className="rounded-md bg-primary px-3 py-2 text-sm font-semibold text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitting ? 'Verifying…' : 'Verify'}
           </button>

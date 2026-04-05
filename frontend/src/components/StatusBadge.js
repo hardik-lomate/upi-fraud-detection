@@ -5,22 +5,23 @@ function normalizeStatus(txn) {
   const status = String(txn?.status || '').toUpperCase();
 
   if (decision === 'BLOCK' || status === 'BLOCKED') return 'BLOCK';
-  if (decision === 'VERIFY' || status === 'PENDING_VERIFICATION') return 'VERIFY';
+  if (decision === 'VERIFY' || status === 'PENDING_VERIFICATION' || status === 'PENDING') return 'VERIFY';
   if (decision === 'ALLOW' || status === 'ALLOWED' || status === 'VERIFIED') return 'ALLOW';
   return status || decision || 'UNKNOWN';
 }
 
 function stylesFor(label) {
-  if (label === 'ALLOW') return 'border-success/20 bg-success/10 text-success';
-  if (label === 'VERIFY') return 'border-warning/20 bg-warning/10 text-warning';
-  if (label === 'BLOCK') return 'border-danger/20 bg-danger/10 text-danger';
-  return 'border-border bg-bg/40 text-textSecondary';
+  if (label === 'ALLOW') return 'border-success/30 bg-success/15 text-success';
+  if (label === 'VERIFY') return 'border-warning/30 bg-warning/15 text-warning';
+  if (label === 'BLOCK') return 'border-danger/30 bg-danger/15 text-danger';
+  return 'border-border/80 bg-bg/40 text-textSecondary';
 }
 
 export default function StatusBadge({ txn }) {
   const label = normalizeStatus(txn);
   return (
-    <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${stylesFor(label)}`}>
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] font-semibold tracking-wide ${stylesFor(label)}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />
       {label}
     </span>
   );

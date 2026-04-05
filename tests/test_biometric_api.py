@@ -57,7 +57,7 @@ def test_biometric_verify_success_updates_transaction(app_client):
         assert r.status_code == 200
         data = r.json()
         assert data["decision"] == "VERIFY"
-        assert data["status"] == "PENDING_VERIFICATION"
+        assert data["status"] == "PENDING"
 
         vr = app_client.post("/verify-biometric", json={"transaction_id": txn_id, "method": "fingerprint"})
         assert vr.status_code == 200
@@ -105,7 +105,7 @@ def test_biometric_verify_failure_blocks_and_increments_history(app_client):
         assert r.status_code == 200
         data = r.json()
         assert data["decision"] == "VERIFY"
-        assert data["status"] == "PENDING_VERIFICATION"
+        assert data["status"] == "PENDING"
 
         vr = app_client.post("/verify-biometric", json={"transaction_id": txn_id, "method": "face"})
         assert vr.status_code == 200
@@ -122,7 +122,7 @@ def test_biometric_verify_failure_blocks_and_increments_history(app_client):
 
         hist = db.query(FraudHistory).filter(FraudHistory.upi_id == "bio_fail@upi").first()
         assert hist is not None
-        assert (hist.fraud_count or 0) >= 2  # 1 for step-up + 1 for biometric failure
+        assert (hist.fraud_count or 0) >= 1  # biometric failure increments fraud history
         assert (hist.block_count or 0) >= 1
     finally:
         db.close()

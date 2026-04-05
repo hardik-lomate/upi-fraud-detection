@@ -1,4 +1,4 @@
-"""Pydantic models — enriched with descriptions and examples for OpenAPI docs."""
+"""Pydantic models — enriched with descriptions and examples for OpenAPI docs. v3.0.0."""
 
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
@@ -67,7 +67,8 @@ class PredictionResponse(BaseModel):
     """Full prediction result with ML scores, rules, SHAP explanations, and risk breakdown."""
     transaction_id: str
     fraud_score: float = Field(..., ge=0.0, le=1.0,
-        description="Ensemble fraud probability. XGBoost(45%) + LightGBM(35%) + IsoForest(20%)")
+        description="Ensemble fraud probability. XGBoost(30%) + LightGBM(30%) + CatBoost(25%) + IsoForest(15%)")
+    risk_score: float = Field(..., ge=0.0, le=1.0, description="Alias of fraud_score for lock-check response format")
     decision: str = Field(..., description="ALLOW, VERIFY, or BLOCK")
     risk_level: str = Field(..., description="LOW, MEDIUM, or HIGH")
     message: str = Field(..., description="Human-readable decision explanation")
@@ -80,20 +81,22 @@ class PredictionResponse(BaseModel):
     device_anomalies: list[DeviceAnomaly] = Field(default=[], description="Device/geo anomalies detected")
     graph_info: Optional[GraphInfo] = Field(None, description="Network analysis results")
     risk_breakdown: Optional[RiskBreakdown] = Field(None, description="Multi-dimensional risk scores")
-    model_version: str = Field("2.0.0", description="Model version used for this prediction")
-    status: str = Field("ALLOWED", description="Transaction state: ALLOWED, BLOCKED, PENDING_VERIFICATION, VERIFIED")
+    npci_category: Optional[str] = Field(None, description="NPCI fraud taxonomy category")
+    vpa_risk: Optional[dict] = Field(None, description="UPI ID pattern risk analysis")
+    model_version: str = Field("3.0.0", description="Model version used for this prediction")
+    status: str = Field("ALLOWED", description="Simplified state: ALLOWED, BLOCKED, PENDING")
     timestamp: Optional[str] = Field(None, description="ISO 8601 timestamp used for scoring")
 
     model_config = {
         "json_schema_extra": {
             "example": {
-                "transaction_id": "TXN_20260403_a1b2c3",
+                "transaction_id": "TXN_20260405_a1b2c3",
                 "fraud_score": 0.15,
                 "decision": "ALLOW",
                 "risk_level": "LOW",
                 "message": "Transaction appears legitimate (15.0%). Approved.",
-                "models_used": ["xgboost", "lightgbm", "isolation_forest"],
-                "model_version": "2.0.0",
+                "models_used": ["xgboost", "lightgbm", "catboost", "isolation_forest"],
+                "model_version": "3.0.0",
             }
         }
     }

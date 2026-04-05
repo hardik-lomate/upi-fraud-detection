@@ -1,6 +1,7 @@
 """
-UPI Fraud Detection API — Main Application (v2.0.0).
+UPI Fraud Detection API — Main Application (v3.0.0).
 Central controller: pipeline.py. All features wired. Zero business logic here.
+4-model ensemble: XGBoost + LightGBM + CatBoost + IsolationForest.
 """
 
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request, WebSocket, UploadFile, File
@@ -14,6 +15,7 @@ import time
 import io
 import csv
 import os
+import json
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
@@ -24,7 +26,7 @@ from .models import (
     RuleDetail, DeviceAnomaly, GraphInfo, RiskBreakdown,
     FeedbackRequest, BatchPredictSummary,
 )
-from .predict import predict_fraud, load_all_models, get_metadata, get_thresholds
+from .predict import predict_fraud, load_all_models, get_metadata
 from .feature_extract import extract_features
 from .history_store import hydrate_from_db, get_store_stats
 from .database import (
@@ -39,7 +41,14 @@ from .rules_engine import evaluate_rules, get_rule_decision
 from .explainability import explain_prediction, format_reasons
 from .audit import log_prediction, get_audit_logs, get_prediction_audit_record
 from .auth import get_current_client, check_permission, create_access_token
-from .monitoring import record_prediction, get_drift_report, get_prediction_stats, load_reference_distribution
+from .monitoring import (
+    record_prediction,
+    get_drift_report,
+    get_prediction_stats,
+    load_reference_distribution,
+    record_latency,
+    get_latency_stats,
+)
 from .device_fingerprint import check_device_anomalies, update_device_history
 from .graph_features import get_graph
 from .pipeline import run_pipeline
@@ -47,6 +56,11 @@ from .pipeline import PipelineContext, step_validate
 from .feedback import save_feedback, get_feedback_stats
 from .live_feed import live_feed_handler
 from .biometric import verify_biometric
+from .graph_api import router as graph_router
+from .cases import router as cases_router, init_cases_table
+from .nlg_summary import router as nlg_router
+from .rbi_report import router as rbi_router
+from .upi_pattern import get_sender_receiver_vpa_risk
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("upi_fraud")
@@ -56,12 +70,20 @@ limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title="UPI Fraud Detection API",
-    version="2.0.0",
+    version="3.0.0",
     description=(
-        "Real-time UPI fraud detection with ensemble ML (XGBoost + LightGBM + IsoForest), "
-        "SHAP explainability, graph analysis, rules engine, and compliance audit logging."
+        "Real-time UPI fraud detection with 4-model ensemble ML "
+        "(XGBoost + LightGBM + CatBoost + IsolationForest), online learning (River), "
+        "SHAP explainability, graph investigation, case management, NLG summaries, "
+        "RBI compliance reporting, and UPI pattern analysis."
     ),
 )
+
+# Register v3.0 routers
+app.include_router(graph_router)
+app.include_router(cases_router)
+app.include_router(nlg_router)
+app.include_router(rbi_router)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -82,8 +104,9 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup():
-    logger.info("=== Starting UPI Fraud Detection API ===")
+    logger.info("=== Starting UPI Fraud Detection API v3.0.0 ===")
     init_db()
+    init_cases_table()
     load_all_models()
     records = load_recent_history(days=7)
     hydrate_from_db(records)
@@ -152,18 +175,49 @@ def _run_prediction(txn_dict: dict):
     )
 
 
+def _get_npci_category(ctx) -> str:
+    """Map decision to NPCI fraud taxonomy."""
+    from feature_contract import NPCI_TAXONOMY
+    if ctx.decision == "ALLOW":
+        return NPCI_TAXONOMY.get("ALLOW", "Legitimate")
+    if ctx.decision == "BLOCK":
+        if any(a.get("type") == "IMPOSSIBLE_TRAVEL" for a in ctx.device_anomalies):
+            return NPCI_TAXONOMY.get("BLOCK_DEVICE", "Device Compromise")
+        if ctx.graph_info and ctx.graph_info.get("is_mule_suspect"):
+            return NPCI_TAXONOMY.get("BLOCK_MULE", "Money Mule Network")
+        if ctx.rule_decision == "BLOCK":
+            return NPCI_TAXONOMY.get("BLOCK_RULES", "Rule-Based Block")
+        return NPCI_TAXONOMY.get("BLOCK_ML", "ML-Detected Anomaly")
+    # VERIFY
+    if ctx.fraud_score >= 0.7:
+        return NPCI_TAXONOMY.get("VERIFY_HIGH", "UPI Credential Theft Suspect")
+    return NPCI_TAXONOMY.get("VERIFY_MEDIUM", "Social Engineering Suspect")
+
+
 def _ctx_to_response(ctx) -> dict:
     risk = _compute_risk_breakdown(ctx)
     is_biometric = ctx.decision == "VERIFY"
     if is_biometric:
-        status = "PENDING_VERIFICATION"
+        status = "PENDING"
     elif ctx.decision == "BLOCK":
         status = "BLOCKED"
     else:
         status = "ALLOWED"
+
+    # VPA risk analysis
+    vpa_risk = None
+    try:
+        sender = ctx.raw_txn.get("sender_upi", "")
+        receiver = ctx.raw_txn.get("receiver_upi", "")
+        if sender and receiver:
+            vpa_risk = get_sender_receiver_vpa_risk(sender, receiver)
+    except Exception:
+        pass
+
     return {
         "transaction_id": ctx.txn_id,
         "fraud_score": ctx.fraud_score,
+        "risk_score": ctx.risk_score,
         "decision": ctx.decision,
         "risk_level": ctx.risk_level,
         "message": ctx.message,
@@ -185,15 +239,10 @@ def _ctx_to_response(ctx) -> dict:
         "graph_info": {k: v for k, v in ctx.graph_info.items()
                         if k in GraphInfo.model_fields} if ctx.graph_info else None,
         "risk_breakdown": risk.model_dump(),
+        "npci_category": _get_npci_category(ctx),
+        "vpa_risk": vpa_risk,
         "model_version": ctx.model_version,
     }
-
-
-def _bg_save(txn_id, sender, receiver, amount, fraud_score, decision, timestamp, device_id):
-    try:
-        save_transaction(txn_id, sender, receiver, amount, fraud_score, decision, timestamp, device_id)
-    except Exception as e:
-        logger.error(f"DB save failed: {e}")
 
 
 def _bg_audit(txn_id, sender, receiver, amount, fraud_score, decision, risk_level,
@@ -224,6 +273,21 @@ async def predict(
     client: dict = Depends(get_current_client),
 ):
     check_permission(client, "predict")
+    start_perf = time.perf_counter()
+
+    def _finish(resp: dict, cache_hit: bool = False):
+        elapsed_ms = (time.perf_counter() - start_perf) * 1000.0
+        record_latency(elapsed_ms, cache_hit=cache_hit)
+        logger.info(
+            "predict txn=%s decision=%s risk_score=%.4f latency_ms=%.2f cache_hit=%s",
+            resp.get("transaction_id"),
+            resp.get("decision"),
+            float(resp.get("risk_score") or 0.0),
+            elapsed_ms,
+            cache_hit,
+        )
+        return PredictionResponse(**resp)
+
     try:
         # Idempotency for deterministic demos: compute the final transaction_id (even if omitted)
         # and if it already exists, return the stored outcome.
@@ -234,6 +298,14 @@ async def predict(
         if txn_id:
             existing = get_transaction_by_id(txn_id)
             if existing:
+                cached = existing.get("response_json")
+                if cached:
+                    try:
+                        return _finish(json.loads(cached), cache_hit=True)
+                    except Exception:
+                        # Fall back to legacy reconstruction if cache is invalid.
+                        pass
+
                 audit_rec = get_prediction_audit_record(txn_id)
                 fraud_score = float(existing.get("fraud_score") or 0.0)
                 decision = existing.get("decision") or "ALLOW"
@@ -256,21 +328,21 @@ async def predict(
                 else:
                     msg = "This transaction is unusual. Please verify your identity to prevent fraud."
 
-                status = existing.get("status") or (
-                    "PENDING_VERIFICATION" if decision == "VERIFY" else ("BLOCKED" if decision == "BLOCK" else "ALLOWED")
-                )
+                # Simplified API status per lock-check spec
+                status_simple = "PENDING" if decision == "VERIFY" else ("BLOCKED" if decision == "BLOCK" else "ALLOWED")
 
                 timestamp = existing.get("timestamp") or tmp_ctx.timestamp
 
                 resp = {
                     "transaction_id": existing["transaction_id"],
                     "fraud_score": fraud_score,
+                    "risk_score": fraud_score,
                     "decision": decision,
                     "risk_level": risk_level,
                     "message": msg,
                     "requires_biometric": decision == "VERIFY",
                     "biometric_methods": ["fingerprint", "face", "iris"] if decision == "VERIFY" else [],
-                    "status": status,
+                    "status": status_simple,
                     "reasons": reasons,
                     "timestamp": timestamp,
                     "individual_scores": {},
@@ -281,7 +353,7 @@ async def predict(
                     "risk_breakdown": None,
                     "model_version": MODEL_VERSION,
                 }
-                return PredictionResponse(**resp)
+                return _finish(resp, cache_hit=True)
 
             ctx = _run_prediction(txn.model_dump())
 
@@ -290,9 +362,12 @@ async def predict(
 
         record_prediction(ctx.fraud_score, ctx.features)
 
+        resp = _ctx_to_response(ctx)
+
         rules_names = [r.rule_name for r in ctx.rules_triggered]
+
         # Persist synchronously for demo stability (immediate idempotent reads).
-        _bg_save(
+        save_transaction(
             ctx.txn_id,
             txn.sender_upi,
             txn.receiver_upi,
@@ -301,6 +376,7 @@ async def predict(
             ctx.decision,
             ctx.timestamp,
             ctx.raw_txn.get("sender_device_id") or "",
+            response_json=json.dumps(resp, ensure_ascii=False, separators=(",", ":")),
         )
         _bg_audit(
             ctx.txn_id,
@@ -316,8 +392,7 @@ async def predict(
             ctx.timestamp,
         )
 
-        resp = _ctx_to_response(ctx)
-        return PredictionResponse(**resp)
+        return _finish(resp, cache_hit=False)
     except Exception as e:
         logger.exception(f"Prediction failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -391,11 +466,23 @@ async def batch_predict(
 # =============================================
 
 @app.post("/feedback", summary="Submit analyst feedback",
-          description="Label a transaction as confirmed_fraud, false_positive, or true_negative. Feeds into retraining pipeline.")
+          description="Label a transaction as confirmed_fraud, false_positive, or true_negative. Feeds into retraining pipeline and online learning model.")
 @limiter.limit("60/minute")
 async def submit_feedback(request: Request, fb: FeedbackRequest, client: dict = Depends(get_current_client)):
     check_permission(client, "predict")
     save_feedback(fb.transaction_id, fb.analyst_verdict, fb.analyst_notes or "")
+
+    # Feed into online model for continuous learning
+    try:
+        from ml.online_model import learn_one, get_online_model_stats
+        txn = get_transaction_by_id(fb.transaction_id)
+        if txn:
+            features = {"amount": txn.get("amount", 0), "fraud_score": txn.get("fraud_score", 0)}
+            is_fraud = fb.analyst_verdict == "confirmed_fraud"
+            learn_one(features, is_fraud=is_fraud)
+    except Exception as e:
+        logger.warning(f"Online model update skipped: {e}")
+
     return {"status": "ok", "transaction_id": fb.transaction_id, "verdict": fb.analyst_verdict}
 
 @app.get("/feedback/stats", summary="Feedback statistics",
@@ -488,6 +575,11 @@ async def drift_report(request: Request, client: dict = Depends(get_current_clie
 async def prediction_stats(request: Request, client: dict = Depends(get_current_client)):
     return get_prediction_stats()
 
+@app.get("/monitoring/latency", summary="Predict API latency statistics")
+@limiter.limit("30/minute")
+async def latency_stats(request: Request, client: dict = Depends(get_current_client)):
+    return get_latency_stats()
+
 @app.get("/monitoring/graph", summary="Transaction graph statistics")
 @limiter.limit("10/minute")
 async def graph_stats(request: Request, client: dict = Depends(get_current_client)):
@@ -511,10 +603,17 @@ async def audit_logs(request: Request, date: str = None, limit: int = 100,
 
 @app.get("/health", summary="Quick health check")
 async def health():
+    online_stats = {}
+    try:
+        from ml.online_model import get_online_model_stats
+        online_stats = get_online_model_stats()
+    except Exception:
+        pass
     return {
-        "status": "ok", "version": "2.0.0",
+        "status": "ok", "version": "3.0.0",
         "model_version": MODEL_VERSION,
         "store": get_store_stats(),
+        "online_model": online_stats,
         "timestamp": datetime.now().isoformat(),
     }
 

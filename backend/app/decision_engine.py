@@ -1,93 +1,170 @@
 """Decision engine.
 
-Keeps the system stable and predictable for demo usage:
-- Uses thresholds for LOW/MEDIUM/HIGH
-- Requires biometric verification for MEDIUM
-- For HIGH, blocks only when multiple strong signals exist or user has strong fraud history
-
-Outputs a short, readable list of reasons suitable for UI display.
+Deterministic production-style logic:
+- Build a weighted signal score from explicit fraud indicators.
+- Blend ML score with signal score into a final risk score.
+- Apply layered ALLOW/VERIFY/BLOCK policy using trusted receiver and velocity strength.
 """
 
-import sys
-import os
 from typing import Optional
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-from feature_contract import THRESHOLD_FLAG, THRESHOLD_BLOCK
 
-from .database import get_user_fraud_history, increment_fraud_count
+SIGNAL_WEIGHTS = {
+    "new_device": 0.2,
+    "new_receiver": 0.2,
+    "high_amount": 0.2,
+    "night_time": 0.1,
+    "velocity": 0.3,
+}
+
+HIGH_AMOUNT_THRESHOLD = 25000.0
 
 
-def _derive_signals(
-    features: dict,
-    device_anomalies: Optional[list],
-    graph_info: Optional[dict],
-) -> tuple[list[str], int, bool, bool]:
-    reasons: list[str] = []
+def _to_bool(value) -> bool:
+    return int(value or 0) == 1
 
-    amount_dev = float(features.get("amount_deviation", 0) or 0)
-    is_new_device = int(features.get("is_new_device", 0) or 0) == 1
-    is_new_receiver = int(features.get("is_new_receiver", 0) or 0) == 1
-    tx_60s = int(features.get("_sender_txn_count_60s", 0) or 0)
-    tx_1h = int(features.get("_sender_txn_count_1h", 0) or 0)
-    tx_24h = int(features.get("sender_txn_count_24h", 0) or 0)
-    is_night = int(features.get("is_night", 0) or 0) == 1
-    cooldown_active = int(features.get("_cooldown_active", 0) or 0) == 1
 
-    trusted_receiver = not is_new_receiver
-    high_velocity = False
+def _clamp(value: float, lower: float = 0.0, upper: float = 1.0) -> float:
+    return max(lower, min(upper, value))
 
-    strong = 0
-    if cooldown_active:
-        reasons.append("Recent verification")
-    if abs(amount_dev) >= 3.0:
-        reasons.append("High amount anomaly")
-        strong += 1
-    if is_new_device:
-        reasons.append("New device")
-        strong += 1
-    if is_new_receiver:
-        reasons.append("New receiver")
-        strong += 1
-    if tx_60s >= 5:
-        reasons.append("High velocity (last 60s)")
-        high_velocity = True
-        strong += 1
-    elif tx_1h >= 5:
-        reasons.append("High velocity (last 1h)")
-        strong += 1
-    elif tx_24h >= 20:
-        reasons.append("High activity (last 24h)")
-        strong += 1
-    if is_night:
-        reasons.append("Unusual time (night)")
 
-    for a in (device_anomalies or []):
-        t = a.get("type")
-        if t == "IMPOSSIBLE_TRAVEL":
-            reasons.append("Location anomaly")
-            strong += 1
-        elif t == "IP_SUBNET_CHANGE":
-            reasons.append("IP subnet change")
-        elif t == "NEW_DEVICE":
-            # Avoid duplicate text; still counts as strong.
-            if "New device" not in reasons:
-                reasons.append("New device")
-                strong += 1
+def _extract_flags(features: dict) -> dict:
+    amount = float(features.get("amount", 0) or 0)
+    velocity_count = int(features.get("_sender_txn_count_60s", 0) or 0)
 
-    if graph_info and graph_info.get("is_mule_suspect"):
-        reasons.append("Mule account pattern")
-        strong += 1
+    has_device_signal = "is_new_device" in features
+    has_receiver_signal = "is_new_receiver" in features
 
-    # Keep readable and stable
-    deduped: list[str] = []
-    seen = set()
-    for r in reasons:
-        if r not in seen:
-            seen.add(r)
-            deduped.append(r)
+    new_device = _to_bool(features.get("is_new_device", 0)) if has_device_signal else False
+    new_receiver = _to_bool(features.get("is_new_receiver", 0)) if has_receiver_signal else False
+    night_time = _to_bool(features.get("is_night", 0))
+    cooldown_active = _to_bool(features.get("_cooldown_active", 0))
+    trusted_receiver = (not new_receiver) if has_receiver_signal else False
+    known_device = (not new_device) if has_device_signal else False
+    high_amount = amount >= HIGH_AMOUNT_THRESHOLD
+    velocity_flag = velocity_count >= 5
+    velocity_strong = velocity_count >= 10
 
-    return deduped[:8], strong, trusted_receiver, high_velocity
+    txn_type = str(features.get("_transaction_type", features.get("transaction_type", "")) or "")
+    emergency_like = txn_type in {"bill_payment", "recharge"} and amount <= 50000
+
+    sender_txn_count_24h = int(features.get("sender_txn_count_24h", 0) or 0)
+    amount_deviation = abs(float(features.get("amount_deviation", 0) or 0))
+    repeated_safe_behavior = (
+        sender_txn_count_24h >= 3
+        and amount_deviation <= 1.25
+        and known_device
+        and trusted_receiver
+        and not velocity_flag
+    )
+
+    return {
+        "amount": amount,
+        "velocity_count": velocity_count,
+        "new_device": new_device,
+        "new_receiver": new_receiver,
+        "night_time": night_time,
+        "cooldown_active": cooldown_active,
+        "trusted_receiver": trusted_receiver,
+        "known_device": known_device,
+        "high_amount": high_amount,
+        "velocity_flag": velocity_flag,
+        "velocity_strong": velocity_strong,
+        "emergency_like": emergency_like,
+        "repeated_safe_behavior": repeated_safe_behavior,
+    }
+
+
+def compute_signal_score(features: dict) -> tuple[float, dict]:
+    """Compute deterministic rule-signal score with fixed weights."""
+    flags = _extract_flags(features)
+    score = 0.0
+
+    if flags["new_device"]:
+        score += SIGNAL_WEIGHTS["new_device"]
+    if flags["new_receiver"]:
+        score += SIGNAL_WEIGHTS["new_receiver"]
+    if flags["high_amount"]:
+        score += SIGNAL_WEIGHTS["high_amount"]
+    if flags["night_time"]:
+        score += SIGNAL_WEIGHTS["night_time"]
+    if flags["velocity_flag"]:
+        score += SIGNAL_WEIGHTS["velocity"]
+
+    return (_clamp(score), flags)
+
+
+def compute_risk_score(ml_score: float, features: dict) -> tuple[float, dict]:
+    """Blend ML score + signal score with deterministic false-positive controls."""
+    signal_score, flags = compute_signal_score(features)
+    ml_score = _clamp(float(ml_score))
+
+    # Blend: ML probability remains primary, explicit behavioral signals refine it.
+    risk_score = (0.6 * ml_score) + (0.4 * signal_score)
+
+    # False-positive reduction for known-safe patterns.
+    if flags["trusted_receiver"] and not flags["high_amount"] and not flags["velocity_flag"]:
+        risk_score -= 0.08
+    if flags["known_device"] and not flags["high_amount"] and not flags["velocity_flag"] and not flags["night_time"]:
+        risk_score -= 0.08
+    if flags["cooldown_active"]:
+        risk_score -= 0.12
+    if flags["repeated_safe_behavior"]:
+        risk_score -= 0.1
+
+    # Keep important risk contexts in VERIFY lane even with low ML score.
+    if flags["high_amount"]:
+        risk_score = max(risk_score, 0.34)
+    if flags["high_amount"] and flags["new_device"]:
+        risk_score = max(risk_score, 0.46)
+
+    # Very high ML confidence should stay in high-risk lane unless strongly mitigated.
+    if ml_score >= 0.8 and not flags["cooldown_active"]:
+        risk_score = max(risk_score, 0.72)
+
+    # Velocity attacks are a strong deterministic fraud signal.
+    if flags["velocity_strong"] and not flags["trusted_receiver"]:
+        risk_score = max(risk_score, 0.82)
+
+    # Emergency-like bill payments should be stepped up, not hard-blocked by default.
+    if flags["emergency_like"] and not flags["velocity_strong"]:
+        risk_score -= 0.07
+
+    return (_clamp(risk_score), flags)
+
+
+def build_reasons(features: dict) -> list[str]:
+    flags = _extract_flags(features)
+    risk_reasons: list[str] = []
+    safe_reasons: list[str] = []
+
+    if flags["velocity_strong"]:
+        risk_reasons.append("Very high velocity (10+ transactions/min)")
+    elif flags["velocity_flag"]:
+        risk_reasons.append("Multiple rapid transactions (5+ transactions/min)")
+
+    if flags["new_device"]:
+        risk_reasons.append("New device")
+    if flags["new_receiver"]:
+        risk_reasons.append("New receiver")
+    if flags["high_amount"]:
+        risk_reasons.append("High transaction amount")
+    if flags["night_time"]:
+        risk_reasons.append("Unusual transaction time")
+
+    if flags["trusted_receiver"]:
+        safe_reasons.append("Trusted receiver history")
+    if flags["known_device"]:
+        safe_reasons.append("Known device history")
+    if flags["cooldown_active"]:
+        safe_reasons.append("Recent successful verification cooldown")
+
+    combined = risk_reasons[:4]
+    if not combined:
+        combined = safe_reasons[:3]
+    if not combined:
+        combined = ["No strong risk signals detected"]
+    return combined
 
 
 def make_decision(
@@ -98,113 +175,52 @@ def make_decision(
     device_anomalies: Optional[list] = None,
     graph_info: Optional[dict] = None,
 ) -> tuple:
-    """
-    Enhanced 3-level decision with step-up biometric auth.
-
-    Returns: (decision, risk_level, message, reasons)
-            decision: ALLOW | VERIFY | BLOCK
-    """
+    """Return (decision, risk_level, message, reasons, risk_score)."""
     features = features or {}
-    # If rules triggered a hard BLOCK, respect that — no biometric bypass
-    if rules_triggered:
-        hard_blocks = [r for r in rules_triggered if r.get("action") == "BLOCK"]
-        if hard_blocks:
-            rule_names = ", ".join(r.get("rule_name", "RULE") for r in hard_blocks)
-            # Track fraud count for rule-blocked transactions
-            if sender_upi:
-                increment_fraud_count(sender_upi, was_blocked=True)
-            return (
-                "BLOCK", "HIGH",
-                f"Transaction blocked by security rules ({rule_names}). Cannot bypass.",
-                [f"Rule block: {rule_names}"]
-            )
+    risk_score, flags = compute_risk_score(fraud_score, features)
 
-    # Derive human-readable risk signals
-    signal_reasons, strong_count, trusted_receiver, high_velocity = _derive_signals(
-        features=features,
-        device_anomalies=device_anomalies,
-        graph_info=graph_info,
+    strong_signals = sum(
+        1
+        for s in (
+            flags["new_device"],
+            flags["new_receiver"],
+            flags["high_amount"],
+            flags["velocity_strong"],
+        )
+        if s
     )
 
-    # Fraud history weighting (kept simple + predictable)
-    fraud_hist = None
-    if sender_upi:
-        fraud_hist = get_user_fraud_history(sender_upi)
-    fraud_count = int((fraud_hist or {}).get("fraud_count") or 0)
-    is_flagged = bool((fraud_hist or {}).get("is_flagged") or False)
+    reasons = build_reasons(features)[:4]
 
-    # Fraud history is a signal (not an automatic hard-block) to avoid over-blocking.
-    if fraud_count > 0 or is_flagged:
-        if "Prior fraud history" not in signal_reasons:
-            signal_reasons = ["Prior fraud history", *signal_reasons]
-        if fraud_count >= 3 or is_flagged:
-            strong_count += 1
+    # Exact required flow
+    if risk_score < 0.3:
+        return ("ALLOW", "LOW", "Approved.", reasons, round(risk_score, 4))
 
-    effective_score = float(fraud_score)
-    if int(features.get("_cooldown_active", 0) or 0) == 1:
-        # Small reduction to avoid immediate re-flagging right after successful verification.
-        effective_score = max(0.0, effective_score - 0.10)
-    if fraud_count > 0:
-        # Small additive bump to reflect prior behavior.
-        effective_score = min(1.0, effective_score + 0.03 * min(fraud_count, 5))
+    if risk_score <= 0.7:
+        return ("VERIFY", "MEDIUM", "Verification required.", reasons, round(risk_score, 4))
 
-    # LOW risk — instant ALLOW
-    if effective_score < THRESHOLD_FLAG:
-        reasons = signal_reasons[:6] or ["Low risk score"]
-        return (
-            "ALLOW", "LOW",
-            f"Transaction appears legitimate ({effective_score*100:.1f}%). Approved.",
-            reasons,
-        )
+    # risk_score > 0.7
+    if flags["trusted_receiver"]:
+        return ("VERIFY", "HIGH", "Verification required.", reasons, round(risk_score, 4))
 
-    # MEDIUM risk — require identity verification
-    if effective_score <= THRESHOLD_BLOCK:
-        msg = "This transaction is unusual. Please verify your identity to prevent fraud."
-        # Track the flag
-        if sender_upi:
-            increment_fraud_count(sender_upi, was_blocked=False)
-        reasons = signal_reasons[:6] or ["Unusual transaction"]
-        return ("VERIFY", "MEDIUM", msg, reasons)
+    decision = "VERIFY"
+    message = "Verification required."
+    if flags["velocity_strong"] or strong_signals >= 2:
+        decision = "BLOCK"
+        message = "Blocked for safety."
 
-    # HIGH risk — spec-aligned logic:
-    # - Trusted receiver → VERIFY
-    # - Block when high velocity OR multiple strong risk signals
-    # - Else → VERIFY
-    if trusted_receiver:
-        if sender_upi:
-            increment_fraud_count(sender_upi, was_blocked=False)
-        return (
-            "VERIFY", "HIGH",
-            "This transaction is high risk, but the receiver is trusted. Please verify to continue.",
-            (signal_reasons + ["Trusted receiver"])[:6],
-        )
+    if decision == "BLOCK" and flags["emergency_like"] and not flags["velocity_strong"]:
+        decision = "VERIFY"
+        message = "Verification required for safety."
 
-    if high_velocity or strong_count >= 2:
-        if sender_upi:
-            increment_fraud_count(sender_upi, was_blocked=True)
-        if high_velocity and "High velocity (last 60s)" not in signal_reasons:
-            signal_reasons = ["High velocity (last 60s)", *signal_reasons]
-        return (
-            "BLOCK", "HIGH",
-            f"Transaction blocked ({effective_score*100:.1f}%). Multiple strong risk signals detected.",
-            (signal_reasons[:6] or ["Multiple strong risk signals"]),
-        )
-
-    if sender_upi:
-        increment_fraud_count(sender_upi, was_blocked=False)
-    return (
-        "VERIFY", "HIGH",
-        "This transaction is high risk. Please verify your identity to prevent fraud.",
-        (signal_reasons[:6] or ["High risk score"]),
-    )
+    return (decision, "HIGH", message, reasons, round(risk_score, 4))
 
 
 # Backward-compatible alias
 def make_decision_simple(fraud_score: float) -> tuple:
     """Simple 3-level decision without user history (for batch/live-feed use)."""
-    if fraud_score < THRESHOLD_FLAG:
-        return ("ALLOW", "LOW", f"Transaction appears legitimate ({fraud_score*100:.1f}%). Approved.")
-    elif fraud_score < THRESHOLD_BLOCK:
-        return ("VERIFY", "MEDIUM", f"Suspicious activity detected ({fraud_score*100:.1f}%). Verification required.")
-    else:
-        return ("VERIFY", "HIGH", f"High risk detected ({fraud_score*100:.1f}%). Verification required before transaction can proceed.")
+    if fraud_score < 0.3:
+        return ("ALLOW", "LOW", "Approved.")
+    if fraud_score <= 0.7:
+        return ("VERIFY", "MEDIUM", "Verification required.")
+    return ("VERIFY", "HIGH", "Verification required.")

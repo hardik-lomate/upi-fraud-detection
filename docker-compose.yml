@@ -18,6 +18,8 @@ services:
       timeout: 5s
       retries: 3
     restart: unless-stopped
+    depends_on:
+      - redis
 
   frontend:
     build:
@@ -37,6 +39,14 @@ services:
       - redis_data:/data
     restart: unless-stopped
 
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+
   # Run only when explicitly invoked: docker-compose run trainer
   trainer:
     build:
@@ -45,7 +55,8 @@ services:
     command: >
       sh -c "python ml/generate_data.py &&
              python ml/feature_engineering.py &&
-             python ml/train_ensemble.py"
+             python ml/train_ensemble.py &&
+             python ml/train_catboost.py"
     volumes:
       - ./ml:/app/ml
       - ./monitoring:/app/monitoring
@@ -54,3 +65,4 @@ services:
 
 volumes:
   redis_data:
+  grafana_data:

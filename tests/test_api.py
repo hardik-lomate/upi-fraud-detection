@@ -17,17 +17,16 @@ from unittest.mock import patch
 @pytest.fixture
 def client():
     """Create test client with mocked model loading."""
-    with patch("backend.app.predict.load_all_models"):
-        with patch("backend.app.predict._models", {"xgboost": True}):
-            with patch("backend.app.predict.predict_fraud") as mock_predict:
-                mock_predict.return_value = {
-                    "ensemble_score": 0.15,
-                    "individual_scores": {"xgboost": 0.15},
-                    "models_used": ["xgboost"],
-                    "weights": {"xgboost": 1.0},
-                }
-                from backend.app.main import app
-                yield TestClient(app)
+    with patch("backend.app.main.load_all_models"):
+        with patch("backend.app.main.predict_fraud") as mock_predict:
+            mock_predict.return_value = {
+                "ensemble_score": 0.15,
+                "individual_scores": {"xgboost": 0.15},
+                "models_used": ["xgboost"],
+                "weights": {"xgboost": 1.0},
+            }
+            from backend.app.main import app
+            yield TestClient(app)
 
 
 def test_health_endpoint(client):
@@ -93,6 +92,14 @@ def test_transactions_endpoint(client):
 def test_monitoring_stats(client):
     r = client.get("/monitoring/stats")
     assert r.status_code == 200
+
+
+def test_monitoring_latency(client):
+    r = client.get("/monitoring/latency")
+    assert r.status_code == 200
+    data = r.json()
+    assert "avg_latency_ms" in data
+    assert "max_latency_ms" in data
 
 
 def test_monitoring_graph(client):

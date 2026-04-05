@@ -2,15 +2,20 @@
 
 import json
 import sys
+import time
 
 import requests
 
 BASE = "http://127.0.0.1:8000"
 
+RUN_ID = str(int(time.time()))
+
 payload = {
-    "sender_upi": "lockcheck_user@upi",
-    "receiver_upi": "abc@upi",
-    "amount": 50000,
+    # Use a per-run unique sender/receiver so we don't hit an old cached DB record
+    # for the deterministic txn_id (sender|receiver|amount|type).
+    "sender_upi": f"lockcheck_{RUN_ID}@upi",
+    "receiver_upi": f"merchant_{RUN_ID}@upi",
+    "amount": 30000,
     "transaction_type": "transfer",
     "sender_device_id": "NEW_DEVICE_LOCKCHECK",
 }
@@ -39,7 +44,16 @@ def main() -> int:
                 print("diff", k, "=>", r1.get(k), "vs", r2.get(k))
         return 1
 
-    print("decision:", r1.get("decision"), "score:", r1.get("fraud_score"))
+    print(
+        "decision:",
+        r1.get("decision"),
+        "fraud_score:",
+        r1.get("fraud_score"),
+        "risk_score:",
+        r1.get("risk_score"),
+        "status:",
+        r1.get("status"),
+    )
     print("transaction_id:", r1.get("transaction_id"))
     print("timestamp:", r1.get("timestamp"))
     print("reasons:", r1.get("reasons"))
