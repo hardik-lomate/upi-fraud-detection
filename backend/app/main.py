@@ -204,15 +204,25 @@ def _ctx_to_response(ctx) -> dict:
     else:
         status = "ALLOWED"
 
-    # VPA risk analysis
-    vpa_risk = None
-    try:
-        sender = ctx.raw_txn.get("sender_upi", "")
-        receiver = ctx.raw_txn.get("receiver_upi", "")
-        if sender and receiver:
-            vpa_risk = get_sender_receiver_vpa_risk(sender, receiver)
-    except Exception:
-        pass
+    # Use pipeline-computed VPA risk if available, else compute
+    vpa_risk = getattr(ctx, 'vpa_risk', None) or None
+    if not vpa_risk:
+        try:
+            sender = ctx.raw_txn.get("sender_upi", "")
+            receiver = ctx.raw_txn.get("receiver_upi", "")
+            if sender and receiver:
+                vpa_risk = get_sender_receiver_vpa_risk(sender, receiver)
+        except Exception:
+            pass
+
+    # Geo risk from pipeline
+    geo_risk = getattr(ctx, 'geo_risk', None) or None
+
+    # Rules reasons for frontend display
+    rules_reasons = []
+    for r in ctx.rules_triggered:
+        if hasattr(r, 'reason') and r.reason:
+            rules_reasons.append(r.reason)
 
     return {
         "transaction_id": ctx.txn_id,
@@ -226,12 +236,17 @@ def _ctx_to_response(ctx) -> dict:
         "status": status,
         "reasons": ctx.reasons,
         "timestamp": ctx.timestamp,
+        "sender_upi": ctx.raw_txn.get("sender_upi", ""),
+        "receiver_upi": ctx.raw_txn.get("receiver_upi", ""),
+        "amount": ctx.raw_txn.get("amount", 0),
+        "transaction_type": ctx.raw_txn.get("transaction_type", "purchase"),
         "individual_scores": ctx.individual_scores,
         "models_used": ctx.models_used,
         "rules_triggered": [
             {"rule_name": r.rule_name, "reason": r.reason, "action": r.action}
             for r in ctx.rules_triggered
         ],
+        "rules_reasons": rules_reasons,
         "device_anomalies": [
             {"type": a["type"], "severity": a["severity"], "detail": a["detail"]}
             for a in ctx.device_anomalies
@@ -240,6 +255,7 @@ def _ctx_to_response(ctx) -> dict:
                         if k in GraphInfo.model_fields} if ctx.graph_info else None,
         "risk_breakdown": risk.model_dump(),
         "npci_category": _get_npci_category(ctx),
+        "geo_risk": geo_risk,
         "vpa_risk": vpa_risk,
         "model_version": ctx.model_version,
     }

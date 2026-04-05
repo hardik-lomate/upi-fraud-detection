@@ -32,6 +32,12 @@ class PipelineContext:
     # Step 1: Features
     features: dict = field(default_factory=dict)
 
+    # Step 1.5: Geo & VPA risk
+    geo_risk: dict = field(default_factory=dict)
+    vpa_risk: dict = field(default_factory=dict)
+    india_pattern_matches: list = field(default_factory=list)
+    ip_risk_reason: str = ""
+
     # Step 2: Rules
     rules_triggered: list = field(default_factory=list)
     rule_decision: Optional[str] = None  # "BLOCK", "FLAG", or None
@@ -150,6 +156,35 @@ def step_extract_features(ctx: PipelineContext, extract_fn) -> PipelineContext:
     return ctx
 
 
+def step_geo_vpa_analysis(ctx: PipelineContext) -> PipelineContext:
+    """Step 1.5: Geolocation risk + VPA pattern analysis."""
+    try:
+        from .geo_risk import score_location
+        lat = ctx.raw_txn.get("sender_location_lat")
+        lon = ctx.raw_txn.get("sender_location_lon")
+        ctx.geo_risk = score_location(lat, lon)
+    except Exception as e:
+        ctx.errors.append(f"Geo risk analysis failed: {e}")
+
+    try:
+        from .upi_pattern import get_sender_receiver_vpa_risk
+        sender = ctx.raw_txn.get("sender_upi", "")
+        receiver = ctx.raw_txn.get("receiver_upi", "")
+        if sender and receiver:
+            ctx.vpa_risk = get_sender_receiver_vpa_risk(sender, receiver)
+    except Exception as e:
+        ctx.errors.append(f"VPA risk analysis failed: {e}")
+
+    # Check for impossible travel via device anomalies
+    for anomaly in ctx.device_anomalies:
+        if isinstance(anomaly, dict) and anomaly.get("type") == "IMPOSSIBLE_TRAVEL":
+            ctx.geo_risk["impossible_travel"] = True
+            break
+
+    ctx.processing_steps.append("geo_vpa_analysis")
+    return ctx
+
+
 def step_rules_engine(ctx: PipelineContext, evaluate_fn, decision_fn) -> PipelineContext:
     """Step 2: Run pre-ML rules engine."""
     try:
@@ -187,21 +222,20 @@ def step_ml_predict(ctx: PipelineContext, predict_fn) -> PipelineContext:
 
 def step_decide(ctx: PipelineContext) -> PipelineContext:
     """Step 4: Make final decision (rules can override ML; step-up biometric for medium risk)."""
-    from .decision_engine import make_decision, build_reasons
+    from .decision_engine import make_decision, build_reasons, build_decision_message
 
     # Rules engine hard BLOCK must override everything (e.g., SELF_TRANSFER).
     if ctx.rule_decision == "BLOCK" or any(getattr(r, "action", None) == "BLOCK" for r in (ctx.rules_triggered or [])):
         ctx.decision = "BLOCK"
         ctx.risk_level = "HIGH"
-        ctx.message = "Blocked for safety."
         ctx.risk_score = max(ctx.fraud_score, 0.9)
         rule_reasons = [getattr(r, "reason", "") for r in (ctx.rules_triggered or []) if getattr(r, "reason", "")]
         signal_reasons = [
-            r for r in build_reasons(ctx.features)
+            r for r in build_reasons(ctx.features, ctx.geo_risk, ctx.vpa_risk)
             if r not in {
-                "Trusted receiver history",
-                "Known device history",
-                "Recent successful verification cooldown",
+                "Trusted receiver history — previous history",
+                "Known device",
+                "Recent verification cooldown active",
                 "No strong risk signals detected",
             }
         ]
@@ -209,7 +243,20 @@ def step_decide(ctx: PipelineContext) -> PipelineContext:
         for reason in [*rule_reasons, *signal_reasons]:
             if reason and reason not in merged:
                 merged.append(reason)
-        ctx.decision_reasons = merged[:4] if merged else ["Rule-based block"]
+        ctx.decision_reasons = merged[:5] if merged else ["Rule-based block"]
+
+        # Build rich message for rule-based blocks too
+        rules_list = [{"rule_name": r.rule_name, "reason": r.reason, "action": r.action} for r in ctx.rules_triggered if hasattr(r, 'rule_name')]
+        ctx.message = build_decision_message(
+            decision="BLOCK", risk_score=ctx.risk_score,
+            flags={"high_amount": float(ctx.features.get("amount", 0) or 0) >= 15000},
+            amount=float(ctx.features.get("amount", 0) or 0),
+            sender=ctx.raw_txn.get("sender_upi", ""),
+            receiver=ctx.raw_txn.get("receiver_upi", ""),
+            timestamp=ctx.timestamp,
+            geo_risk=ctx.geo_risk, vpa_risk=ctx.vpa_risk,
+            rules_triggered=rules_list,
+        )
         ctx.processing_steps.append("decide")
         return ctx
 
@@ -219,13 +266,13 @@ def step_decide(ctx: PipelineContext) -> PipelineContext:
     ):
         ctx.decision = "VERIFY"
         ctx.risk_level = "MEDIUM"
-        ctx.message = "Verification required due to a processing error."
+        ctx.message = "Verification required due to a processing error. Confirm your identity."
         ctx.risk_score = max(ctx.fraud_score, 0.5)
-        ctx.decision_reasons = build_reasons(ctx.features) or ["System processing issue"]
+        ctx.decision_reasons = build_reasons(ctx.features, ctx.geo_risk, ctx.vpa_risk) or ["System processing issue"]
         ctx.processing_steps.append("decide")
         return ctx
 
-    rules_list = [{"rule_name": r.rule_name, "action": r.action} for r in ctx.rules_triggered]
+    rules_list = [{"rule_name": r.rule_name, "action": r.action, "reason": r.reason} for r in ctx.rules_triggered if hasattr(r, 'rule_name')]
     ctx.decision, ctx.risk_level, ctx.message, ctx.decision_reasons, ctx.risk_score = make_decision(
         fraud_score=ctx.fraud_score,
         sender_upi=ctx.raw_txn.get("sender_upi"),
@@ -233,6 +280,10 @@ def step_decide(ctx: PipelineContext) -> PipelineContext:
         rules_triggered=rules_list,
         device_anomalies=ctx.device_anomalies,
         graph_info=ctx.graph_info,
+        geo_risk=ctx.geo_risk,
+        vpa_risk=ctx.vpa_risk,
+        timestamp=ctx.timestamp,
+        receiver_upi=ctx.raw_txn.get("receiver_upi", ""),
     )
 
     ctx.processing_steps.append("decide")
@@ -295,7 +346,7 @@ def run_pipeline(
 ) -> PipelineContext:
     """
     Run the full prediction pipeline in order:
-    validate → features → rules → ML → decide → explain → device → graph
+    validate → features → geo/vpa → rules → ML → device → graph → decide → explain
 
     Each step is isolated. If one step fails, the pipeline continues
     with degraded functionality instead of crashing.
@@ -303,6 +354,7 @@ def run_pipeline(
     ctx = PipelineContext()
     ctx = step_validate(ctx, txn_dict)
     ctx = step_extract_features(ctx, extract_fn)
+    ctx = step_geo_vpa_analysis(ctx)  # NEW: geo + VPA before rules
     ctx = step_rules_engine(ctx, evaluate_rules_fn, get_rule_decision_fn)
     ctx = step_ml_predict(ctx, predict_fn)
     ctx = step_device_check(ctx, check_device_fn, update_device_fn, sender_history)

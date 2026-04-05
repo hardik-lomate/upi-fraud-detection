@@ -2,6 +2,7 @@ import React from 'react';
 import StatusBadge, { isVerify } from './StatusBadge';
 import FraudScoreGauge from './FraudScoreGauge';
 import ModelConsensus from './ModelConsensus';
+import ReasonCards from './ReasonCards';
 
 function formatAmount(amount) {
   const n = Number(amount);
@@ -122,7 +123,7 @@ export default function TransactionDetailsPanel({ txn, onVerifyClick, onFeedback
             />
           </Section>
 
-          {/* Risk Breakdown */}
+          {/* Risk Analysis with ReasonCards */}
           <Section title="Risk Analysis">
             <RiskBreakdownBars breakdown={breakdown} />
             {npciCategory && (
@@ -131,18 +132,48 @@ export default function TransactionDetailsPanel({ txn, onVerifyClick, onFeedback
                 <span className="text-xs text-accent font-medium">{npciCategory}</span>
               </div>
             )}
-            <div className="mt-3 text-xs text-textSecondary">Risk factors</div>
-            <ul className="mt-2 space-y-1.5">
-              {(Array.isArray(txn.reasons) ? txn.reasons : []).slice(0, 5).map((r, idx) => (
-                <li key={idx} className="rounded-lg border border-border/50 bg-bg-card/50 px-3 py-1.5 text-xs text-textPrimary flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-warn shrink-0" />
-                  {r}
-                </li>
-              ))}
-              {(!txn.reasons || txn.reasons.length === 0) && (
-                <li className="text-textSecondary text-xs">No explanations available.</li>
-              )}
-            </ul>
+
+            {/* Rich decision message + expandable reason cards */}
+            <div className="mt-4">
+              <ReasonCards reasons={txn.reasons || []} message={txn.message} />
+            </div>
+
+            {/* Geo Risk badge */}
+            {(txn?.raw?.geo_risk?.risk_level || txn?.geo_risk?.risk_level) && (txn?.raw?.geo_risk?.risk_level || txn?.geo_risk?.risk_level) !== 'LOW' && (
+              <div style={{
+                marginTop: 12, padding: '10px 12px', borderRadius: 8,
+                background: '#0D0E14',
+                borderLeft: '3px solid #EF9F27',
+                fontSize: 12,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  <span>🌍</span>
+                  <span style={{ fontWeight: 600, color: '#EF9F27' }}>Geo Risk: {(txn?.raw?.geo_risk || txn?.geo_risk)?.risk_level}</span>
+                </div>
+                <div style={{ color: '#8B8FA3', fontSize: 11 }}>
+                  Region: {(txn?.raw?.geo_risk || txn?.geo_risk)?.region || 'Unknown'}
+                  {(txn?.raw?.geo_risk || txn?.geo_risk)?.risk_multiplier > 1 && ` (${(txn?.raw?.geo_risk || txn?.geo_risk)?.risk_multiplier}x risk)`}
+                </div>
+              </div>
+            )}
+
+            {/* VPA Risk badge */}
+            {(txn?.raw?.vpa_risk?.combined_vpa_risk || txn?.vpa_risk?.combined_vpa_risk) > 0.3 && (
+              <div style={{
+                marginTop: 8, padding: '10px 12px', borderRadius: 8,
+                background: '#0D0E14',
+                borderLeft: '3px solid #E24B4A',
+                fontSize: 12,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  <span>🎭</span>
+                  <span style={{ fontWeight: 600, color: '#E24B4A' }}>VPA Risk Detected</span>
+                </div>
+                <div style={{ color: '#8B8FA3', fontSize: 11 }}>
+                  Combined VPA risk: {((txn?.raw?.vpa_risk || txn?.vpa_risk)?.combined_vpa_risk * 100).toFixed(0)}%
+                </div>
+              </div>
+            )}
           </Section>
 
           {/* Basic Info */}
