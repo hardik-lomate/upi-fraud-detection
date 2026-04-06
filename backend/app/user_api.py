@@ -6,7 +6,7 @@ These endpoints provide consumer-safe responses and hide analyst-only fields.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,7 +27,7 @@ from .database import (
     FraudHistory,
     save_transaction,
 )
-from .cases import CaseRecord
+from .cases import CaseRecord, init_cases_table
 from .monitoring import record_prediction
 from .consumer_messages import (
     build_security_note,
@@ -70,6 +70,24 @@ class ReportFraudRequest(BaseModel):
     transaction_id: str = Field(..., min_length=4)
     reporter_upi: str = Field(..., min_length=3)
     description: str = Field(..., min_length=5, max_length=500)
+
+
+class AnalyzeTransactionRequest(BaseModel):
+    sender_upi: str = Field(..., min_length=3)
+    receiver_upi: str = Field(..., min_length=3)
+    amount: float = Field(..., gt=0, le=500000)
+    transaction_type: str = Field("transfer")
+    sender_device_id: Optional[str] = Field(None, min_length=1)
+    sender_location_lat: Optional[float] = Field(None, ge=-90, le=90)
+    sender_location_lon: Optional[float] = Field(None, ge=-180, le=180)
+    timestamp: Optional[str] = None
+
+
+class AdminUpdateCaseRequest(BaseModel):
+    case_id: int = Field(..., ge=1)
+    status: Optional[Literal["OPEN", "UNDER_REVIEW", "CLOSED_FRAUD", "CLOSED_LEGITIMATE"]] = None
+    assigned_to: Optional[str] = None
+    notes: Optional[str] = None
 
 
 def _normalize_upi(upi_id: str) -> str:
@@ -121,6 +139,85 @@ def _run_prediction(txn_dict: dict):
         sender_history=None,
         graph=get_graph(),
     )
+
+
+def _decision_recommendation(decision: str) -> str:
+    mapped = (decision or "ALLOW").upper()
+    if mapped == "BLOCK":
+        return "Do not proceed with this transaction"
+    if mapped == "VERIFY":
+        return "Proceed only after successful verification"
+    return "Safe to proceed"
+
+
+def _risk_level_from_score(score: float) -> str:
+    if score >= 0.75:
+        return "HIGH_RISK"
+    if score >= 0.40:
+        return "MEDIUM_RISK"
+    return "LOW_RISK"
+
+
+def _vpa_risk_score(vpa_risk: str) -> float:
+    mapping = {
+        "LOW": 0.20,
+        "MEDIUM": 0.60,
+        "HIGH": 0.90,
+    }
+    return float(mapping.get((vpa_risk or "LOW").upper(), 0.20))
+
+
+def _graph_risk_score(graph_info: dict) -> float:
+    info = graph_info or {}
+    score = 0.0
+    if info.get("is_mule_suspect"):
+        score += 0.60
+    score += min(float(info.get("cycle_count", 0) or 0) / 5.0, 0.25)
+    score += min(float(info.get("in_degree", 0) or 0) / 20.0, 0.15)
+    return round(min(1.0, score), 3)
+
+
+def _extract_geo_distance_km(device_anomalies: list[dict]) -> Optional[float]:
+    for anomaly in device_anomalies or []:
+        if anomaly.get("type") != "IMPOSSIBLE_TRAVEL":
+            continue
+        detail = str(anomaly.get("detail", ""))
+        km_prefix = detail.split("km", 1)[0].strip()
+        try:
+            return float(km_prefix)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _analysis_response(ctx, receiver_upi: str) -> dict:
+    decision = (ctx.decision or "ALLOW").upper()
+    fraud_score = float(ctx.fraud_score or 0.0)
+    reasons = [str(r) for r in (ctx.reasons or []) if str(r).strip()]
+    features = ctx.features or {}
+    graph_info = ctx.graph_info or {}
+    receiver_profile = _receiver_info_snapshot(receiver_upi)
+    velocity_raw = float(features.get("_sender_txn_count_60s", 0) or features.get("sender_txn_count_24h", 0) or 0)
+
+    return {
+        "transaction_id": ctx.txn_id,
+        "decision": decision,
+        "risk_score": round(fraud_score, 4),
+        "risk_level": _risk_level_from_score(fraud_score),
+        "reasons": reasons[:5] or ["No high-risk anomaly detected."],
+        "recommendation": _decision_recommendation(decision),
+        "signals": {
+            "new_receiver_flag": bool(int(features.get("is_new_receiver", 0) or 0)),
+            "velocity_score": round(min(1.0, velocity_raw / 10.0), 3),
+            "device_change_flag": bool(int(features.get("is_new_device", 0) or 0)),
+            "geo_distance_km": _extract_geo_distance_km(ctx.device_anomalies or []),
+            "night_transaction_flag": bool(int(features.get("is_night", 0) or 0)),
+            "receiver_risk_score": _vpa_risk_score(receiver_profile.get("vpa_risk", "LOW")),
+            "graph_risk_score": _graph_risk_score(graph_info),
+        },
+        "receiver_profile": receiver_profile,
+        "timestamp": ctx.timestamp,
+    }
 
 
 def _load_response_json(record: TransactionRecord) -> dict:
@@ -259,6 +356,64 @@ def _mark_compromised_profile(db, upi_id: str):
     profile.last_fraud_at = now
 
 
+@router.post("/analyze-transaction")
+@router.post("/api/v1/analyze-transaction", include_in_schema=False)
+async def analyze_transaction(
+    body: AnalyzeTransactionRequest,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "predict")
+
+    sender_upi = _normalize_upi(body.sender_upi)
+    receiver_upi = _normalize_upi(body.receiver_upi)
+    if not sender_upi or not receiver_upi:
+        raise HTTPException(status_code=422, detail="sender_upi and receiver_upi are required")
+
+    txn_dict = {
+        "sender_upi": sender_upi,
+        "receiver_upi": receiver_upi,
+        "amount": body.amount,
+        "transaction_type": body.transaction_type or "transfer",
+        "sender_device_id": body.sender_device_id,
+        "sender_location_lat": body.sender_location_lat,
+        "sender_location_lon": body.sender_location_lon,
+        "timestamp": body.timestamp or datetime.utcnow().isoformat(),
+    }
+
+    try:
+        ctx = _run_prediction(txn_dict)
+        record_prediction(ctx.fraud_score, ctx.features)
+        return _analysis_response(ctx, receiver_upi)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="Unable to analyze transaction right now")
+
+
+@router.post("/get-risk-score")
+@router.post("/api/v1/get-risk-score", include_in_schema=False)
+async def get_risk_score(
+    body: AnalyzeTransactionRequest,
+    client: dict = Depends(get_current_client),
+):
+    analysis = await analyze_transaction(body=body, client=client)
+    return {
+        "decision": analysis["decision"],
+        "risk_score": analysis["risk_score"],
+        "reasons": analysis["reasons"],
+        "recommendation": analysis["recommendation"],
+    }
+
+
+@router.post("/submit-transaction")
+@router.post("/api/v1/submit-transaction", include_in_schema=False)
+async def submit_transaction(
+    body: PayRequest,
+    client: dict = Depends(get_current_client),
+):
+    return await pay_transaction(body=body, client=client)
+
+
 @router.post("/pay")
 async def pay_transaction(
     body: PayRequest,
@@ -360,6 +515,14 @@ async def receiver_info(
     return _receiver_info_snapshot(normalized_upi)
 
 
+@router.get("/api/v1/receiver/{upi_id}/info", include_in_schema=False)
+async def receiver_info_v1(
+    upi_id: str,
+    client: dict = Depends(get_current_client),
+):
+    return await receiver_info(upi_id=upi_id, client=client)
+
+
 @router.get("/my/transactions")
 async def my_transactions(
     sender_upi: str,
@@ -400,6 +563,16 @@ async def my_transactions(
         }
     finally:
         db.close()
+
+
+@router.get("/api/v1/user/{upi_id}/transactions", include_in_schema=False)
+async def my_transactions_v1(
+    upi_id: str,
+    limit: int = 50,
+    status: Optional[str] = None,
+    client: dict = Depends(get_current_client),
+):
+    return await my_transactions(sender_upi=upi_id, limit=limit, status=status, client=client)
 
 
 @router.get("/my/security-score")
@@ -466,12 +639,21 @@ async def my_security_score(
         db.close()
 
 
+@router.get("/api/v1/user/{upi_id}/security-score", include_in_schema=False)
+async def my_security_score_v1(
+    upi_id: str,
+    client: dict = Depends(get_current_client),
+):
+    return await my_security_score(upi_id=upi_id, client=client)
+
+
 @router.post("/my/report-fraud")
 async def report_fraud(
     body: ReportFraudRequest,
     client: dict = Depends(get_current_client),
 ):
     check_permission(client, "transactions")
+    init_cases_table()
 
     transaction_id = (body.transaction_id or "").strip()
     reporter_upi = _normalize_upi(body.reporter_upi)
@@ -514,5 +696,132 @@ async def report_fraud(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Unable to submit report right now")
+    finally:
+        db.close()
+
+
+def _case_payload(record: CaseRecord) -> dict:
+    return {
+        "id": record.id,
+        "txn_id": record.txn_id,
+        "status": record.status,
+        "assigned_to": record.assigned_to,
+        "notes": record.notes or "",
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+        "resolved_at": record.resolved_at.isoformat() if record.resolved_at else None,
+    }
+
+
+@router.post("/report-fraud")
+@router.post("/api/v1/report-fraud", include_in_schema=False)
+async def report_fraud_alias(
+    body: ReportFraudRequest,
+    client: dict = Depends(get_current_client),
+):
+    return await report_fraud(body=body, client=client)
+
+
+@router.get("/admin/get-flagged-transactions")
+@router.get("/api/v1/admin/get-flagged-transactions", include_in_schema=False)
+async def admin_get_flagged_transactions(
+    limit: int = 50,
+    status: str = "ALL",
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "audit")
+
+    limit = max(1, min(limit, 200))
+    status_filter = (status or "ALL").strip().upper()
+    allowed_statuses = {"ALL", "BLOCKED", "PENDING_VERIFICATION", "VERIFIED", "ALLOWED"}
+    if status_filter not in allowed_statuses:
+        raise HTTPException(status_code=422, detail="Unsupported status filter")
+
+    db = SessionLocal()
+    try:
+        query = db.query(TransactionRecord)
+        if status_filter == "ALL":
+            query = query.filter(TransactionRecord.status.in_(["BLOCKED", "PENDING_VERIFICATION"]))
+        else:
+            query = query.filter(TransactionRecord.status == status_filter)
+
+        records = query.order_by(TransactionRecord.id.desc()).limit(limit).all()
+        flagged = [
+            {
+                "transaction_id": row.transaction_id,
+                "sender_upi": _normalize_upi(row.sender_upi),
+                "receiver_upi": _normalize_upi(row.receiver_upi),
+                "amount": float(row.amount or 0.0),
+                "risk_score": float(row.fraud_score or 0.0),
+                "decision": (row.decision or "").upper(),
+                "status": (row.status or "").upper(),
+                "timestamp": row.timestamp,
+            }
+            for row in records
+        ]
+        return {
+            "flagged_transactions": flagged,
+            "total": len(flagged),
+        }
+    finally:
+        db.close()
+
+
+@router.get("/api/v1/graph/{upi_id}", include_in_schema=False)
+async def graph_lookup_v1(
+    upi_id: str,
+    depth: int = 2,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "audit")
+    from .graph_api import get_subgraph
+
+    return get_subgraph(upi_id=upi_id, depth=max(1, min(depth, 4)))
+
+
+@router.post("/admin/update-case")
+@router.post("/api/v1/admin/update-case", include_in_schema=False)
+async def admin_update_case(
+    body: AdminUpdateCaseRequest,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "audit")
+    init_cases_table()
+
+    if body.status is None and body.assigned_to is None and body.notes is None:
+        raise HTTPException(status_code=422, detail="At least one update field is required")
+
+    db = SessionLocal()
+    try:
+        record = db.query(CaseRecord).filter(CaseRecord.id == body.case_id).first()
+        if not record:
+            raise HTTPException(status_code=404, detail=f"Case {body.case_id} not found")
+
+        if body.status is not None:
+            record.status = body.status
+            if body.status.startswith("CLOSED"):
+                record.resolved_at = datetime.utcnow()
+
+        if body.assigned_to is not None:
+            record.assigned_to = body.assigned_to
+
+        if body.notes is not None:
+            stamped = f"[{datetime.utcnow().strftime('%Y-%m-%d %H:%M')}] {body.notes.strip()}"
+            if record.notes:
+                record.notes = f"{record.notes}\n{stamped}"
+            else:
+                record.notes = stamped
+
+        db.commit()
+        db.refresh(record)
+        return {
+            "status": "UPDATED",
+            "case": _case_payload(record),
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Unable to update case right now")
     finally:
         db.close()

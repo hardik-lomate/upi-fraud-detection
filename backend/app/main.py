@@ -60,7 +60,7 @@ from .biometric import verify_biometric
 from .graph_api import router as graph_router
 from .cases import router as cases_router, init_cases_table
 from .nlg_summary import router as nlg_router
-from .rbi_report import router as rbi_router
+from .rbi_report import router as rbi_router, rbi_report as generate_rbi_report
 from .upi_pattern import get_sender_receiver_vpa_risk
 from .user_api import router as user_router
 
@@ -87,6 +87,8 @@ app.include_router(cases_router)
 app.include_router(nlg_router)
 app.include_router(rbi_router)
 app.include_router(user_router)
+app.include_router(graph_router, prefix="/api/v1")
+app.include_router(cases_router, prefix="/api/v1")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -287,6 +289,7 @@ def _bg_audit(txn_id, sender, receiver, amount, fraud_score, decision, risk_leve
 # Core Endpoints
 # =============================================
 
+@app.post("/api/v1/predict", response_model=PredictionResponse, include_in_schema=False)
 @app.post("/predict", response_model=PredictionResponse,
           summary="Predict fraud for a single transaction",
           description="Runs the full 8-step pipeline: validate ΓåÆ features ΓåÆ rules ΓåÆ ML ΓåÆ decide ΓåÆ explain ΓåÆ device ΓåÆ graph")
@@ -490,6 +493,7 @@ async def batch_predict(
 # Feedback
 # =============================================
 
+@app.post("/api/v1/feedback", include_in_schema=False)
 @app.post("/feedback", summary="Submit analyst feedback",
           description="Label a transaction as confirmed_fraud, false_positive, or true_negative. Feeds into retraining pipeline and online learning model.")
 @limiter.limit("60/minute")
@@ -520,6 +524,7 @@ async def feedback_stats(client: dict = Depends(get_current_client)):
 # Biometric Verification
 # =============================================
 
+@app.post("/api/v1/biometric/verify", include_in_schema=False)
 @app.post("/verify", summary="Simulate biometric verification",
           description="Alias for /verify-biometric")
 @app.post("/verify-biometric", summary="Simulate biometric verification",
@@ -585,6 +590,7 @@ async def list_transactions(request: Request, limit: int = 50, client: dict = De
     check_permission(client, "transactions")
     return get_transactions(limit)
 
+@app.post("/api/v1/token", response_model=TokenResponse, include_in_schema=False)
 @app.post("/auth/token", response_model=TokenResponse, summary="Get JWT token from API key")
 async def get_token(req: TokenRequest):
     try:
@@ -592,6 +598,7 @@ async def get_token(req: TokenRequest):
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+@app.get("/api/v1/monitoring/drift", include_in_schema=False)
 @app.get("/monitoring/drift", summary="Feature drift report (PSI)")
 @limiter.limit("10/minute")
 async def drift_report(request: Request, client: dict = Depends(get_current_client)):
@@ -617,12 +624,19 @@ async def graph_stats(request: Request, client: dict = Depends(get_current_clien
 async def store_stats():
     return get_store_stats()
 
+@app.get("/api/v1/audit", include_in_schema=False)
 @app.get("/audit/logs", summary="Immutable audit trail")
 @limiter.limit("10/minute")
 async def audit_logs(request: Request, date: str = None, limit: int = 100,
                      client: dict = Depends(get_current_client)):
     check_permission(client, "audit")
     return get_audit_logs(date, limit)
+
+
+@app.get("/api/v1/rbi/report", include_in_schema=False)
+async def rbi_report_alias(days: int = 30, client: dict = Depends(get_current_client)):
+    check_permission(client, "audit")
+    return generate_rbi_report(days)
 
 
 # =============================================

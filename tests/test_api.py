@@ -109,3 +109,98 @@ def test_monitoring_graph(client):
     assert r.status_code == 200
     data = r.json()
     assert "total_nodes" in data
+
+
+def test_alias_analyze_transaction_exists(client):
+    r = client.post("/analyze-transaction", json={})
+    assert r.status_code == 422
+
+
+def test_alias_submit_transaction_exists(client):
+    r = client.post("/submit-transaction", json={})
+    assert r.status_code == 422
+
+
+def test_alias_get_risk_score_exists(client):
+    r = client.post("/get-risk-score", json={})
+    assert r.status_code == 422
+
+
+def test_alias_report_fraud_exists(client):
+    r = client.post("/report-fraud", json={})
+    assert r.status_code == 422
+
+
+def test_admin_get_flagged_transactions_alias(client):
+    r = client.get("/admin/get-flagged-transactions?limit=5")
+    assert r.status_code == 200
+    data = r.json()
+    assert "flagged_transactions" in data
+    assert "total" in data
+
+
+def test_admin_update_case_alias_not_found(client):
+    r = client.post("/admin/update-case", json={"case_id": 999999, "notes": "review"})
+    assert r.status_code == 404
+
+
+def test_api_v1_predict_alias_exists(client):
+    r = client.post("/api/v1/predict", json={})
+    assert r.status_code == 422
+
+
+def test_api_v1_token_alias_invalid_key(client):
+    r = client.post("/api/v1/token", json={"api_key": "invalid"})
+    assert r.status_code == 401
+
+
+def test_api_v1_user_transactions_path(client):
+    r = client.get("/api/v1/user/alice@upi/transactions?limit=5")
+    assert r.status_code == 200
+    data = r.json()
+    assert "transactions" in data
+
+
+def test_api_v1_user_security_score_path(client):
+    r = client.get("/api/v1/user/alice@upi/security-score")
+    assert r.status_code == 200
+    data = r.json()
+    assert "score" in data
+
+
+def test_api_v1_receiver_info_path(client):
+    r = client.get("/api/v1/receiver/bob@upi/info")
+    assert r.status_code == 200
+    data = r.json()
+    assert "upi_id" in data
+
+
+def test_api_v1_biometric_verify_alias_exists(client):
+    r = client.post("/api/v1/biometric/verify", json={})
+    assert r.status_code == 422
+
+
+def test_api_v1_cases_alias(client):
+    r = client.get("/api/v1/cases?limit=5")
+    assert r.status_code == 200
+    data = r.json()
+    assert "cases" in data
+
+
+def test_api_v1_graph_alias(client):
+    r = client.get("/api/v1/graph/alice@upi?depth=1")
+    assert r.status_code == 200
+    data = r.json()
+    assert "nodes" in data
+
+
+def test_api_v1_audit_alias(client):
+    r = client.get("/api/v1/audit?limit=5")
+    assert r.status_code == 200
+
+
+def test_api_v1_rbi_report_alias(client):
+    r = client.get("/api/v1/rbi/report?days=1")
+    assert r.status_code == 200
+    data = r.json()
+    assert "executive_summary" in data
