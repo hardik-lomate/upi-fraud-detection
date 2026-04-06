@@ -18,6 +18,52 @@ export async function verifyBiometric(transactionId) {
   return res.data;
 }
 
+export async function verifyBiometricWithMethod(transactionId, method = 'fingerprint') {
+  const res = await api.post('/verify-biometric', {
+    transaction_id: transactionId,
+    method,
+  });
+  return res.data;
+}
+
+export async function payTransaction(payload) {
+  const res = await api.post('/pay', payload);
+  return res.data;
+}
+
+export async function fetchMyTransactions(senderUpi, limit = 50, status = '') {
+  const params = new URLSearchParams({
+    sender_upi: senderUpi,
+    limit: String(limit),
+  });
+  if (status) {
+    params.set('status', status);
+  }
+  const res = await api.get(`/my/transactions?${params.toString()}`);
+  return res.data;
+}
+
+export async function fetchMySecurityScore(upiId) {
+  const params = new URLSearchParams({ upi_id: upiId });
+  const res = await api.get(`/my/security-score?${params.toString()}`);
+  return res.data;
+}
+
+export async function fetchReceiverInfo(upiId) {
+  const params = new URLSearchParams({ upi_id: upiId });
+  const res = await api.get(`/receiver/info?${params.toString()}`);
+  return res.data;
+}
+
+export async function reportFraud(txnId, reporterUpi, description) {
+  const res = await api.post('/my/report-fraud', {
+    transaction_id: txnId,
+    reporter_upi: reporterUpi,
+    description,
+  });
+  return res.data;
+}
+
 export async function fetchFlaggedUsers(limit = 50) {
   const res = await api.get(`/fraud-history/flagged?limit=${limit}`);
   return res.data;
@@ -42,32 +88,12 @@ export async function fetchFeedbackStats() {
   return res.data;
 }
 
-// ─── Cases CRUD ────────────────────────────────
-
-export async function fetchCases(status = null, limit = 50) {
-  const q = status ? `?status=${status}&limit=${limit}` : `?limit=${limit}`;
-  const res = await api.get(`/cases${q}`);
-  return res.data;
-}
-
-export async function createCase(txnId, assignedTo, notes) {
-  const res = await api.post('/cases', {
-    txn_id: txnId,
-    assigned_to: assignedTo,
-    notes,
-  });
-  return res.data;
-}
-
-export async function updateCase(caseId, updates) {
-  const res = await api.patch(`/cases/${caseId}`, updates);
-  return res.data;
-}
-
-// ─── Graph Investigation ───────────────────────
-
 export async function fetchGraphSubgraph(upiId, depth = 2) {
-  const res = await api.get(`/graph/subgraph?upi_id=${encodeURIComponent(upiId)}&depth=${depth}`);
+  const params = new URLSearchParams({
+    upi_id: upiId,
+    depth: String(depth),
+  });
+  const res = await api.get(`/graph/subgraph?${params.toString()}`);
   return res.data;
 }
 
@@ -76,55 +102,10 @@ export async function fetchGraphCommunities() {
   return res.data;
 }
 
-export async function markMule(upiId, reason) {
-  const res = await api.post('/graph/mark-mule', { upi_id: upiId, reason });
-  return res.data;
-}
-
-export async function fetchSuspiciousPaths(source, target) {
-  const res = await api.get(`/graph/suspicious-paths?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`);
-  return res.data;
-}
-
-// ─── NLG / Explain ─────────────────────────────
-
-export async function fetchNlgSummary(txnId) {
-  const res = await api.post('/explain/summary', { transaction_id: txnId });
-  return res.data;
-}
-
-// ─── Reports ───────────────────────────────────
-
-export async function fetchRbiReport() {
-  const res = await api.get('/reports/rbi');
-  return res.data;
-}
-
-export async function fetchReportSummary() {
-  const res = await api.get('/reports/summary');
-  return res.data;
-}
-
-// ─── Monitoring ────────────────────────────────
-
-export async function fetchDriftReport() {
-  const res = await api.get('/monitoring/drift');
-  return res.data;
-}
-
-export async function fetchLatencyStats() {
-  const res = await api.get('/monitoring/latency');
-  return res.data;
-}
-
-export async function fetchGraphStats() {
-  const res = await api.get('/monitoring/graph');
-  return res.data;
-}
-
-// ─── Model Info ────────────────────────────────
-
-export async function fetchModelInfo() {
-  const res = await api.get('/model/info');
+export async function markMule(upiId, reason = '') {
+  const res = await api.post('/graph/mark-mule', {
+    upi_id: upiId,
+    reason,
+  });
   return res.data;
 }

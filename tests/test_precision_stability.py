@@ -55,6 +55,19 @@ def _post(client: TestClient, payload: dict) -> dict:
 
 
 def test_normal_transaction_allow(client):
+    _post(
+        client,
+        {
+            "transaction_id": f"normal-seed-{RUN_SUFFIX}",
+            "sender_upi": "normal_user_case@upi",
+            "receiver_upi": "known_shop_case@upi",
+            "amount": 500,
+            "transaction_type": "purchase",
+            "sender_device_id": "NORMAL_DEVICE_001",
+            "timestamp": "2026-04-01T11:59:00",
+        },
+    )
+
     data = _post(
         client,
         {

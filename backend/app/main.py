@@ -1,5 +1,5 @@
 """
-UPI Fraud Detection API — Main Application (v3.0.0).
+UPI Fraud Detection API ΓÇö Main Application (v3.0.0).
 Central controller: pipeline.py. All features wired. Zero business logic here.
 4-model ensemble: XGBoost + LightGBM + CatBoost + IsolationForest.
 """
@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from contextlib import asynccontextmanager
 from datetime import datetime
 import logging
 import time
@@ -61,6 +62,7 @@ from .cases import router as cases_router, init_cases_table
 from .nlg_summary import router as nlg_router
 from .rbi_report import router as rbi_router
 from .upi_pattern import get_sender_receiver_vpa_risk
+from .user_api import router as user_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("upi_fraud")
@@ -84,6 +86,7 @@ app.include_router(graph_router)
 app.include_router(cases_router)
 app.include_router(nlg_router)
 app.include_router(rbi_router)
+app.include_router(user_router)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -102,7 +105,6 @@ app.add_middleware(
 # Startup
 # =============================================
 
-@app.on_event("startup")
 def startup():
     logger.info("=== Starting UPI Fraud Detection API v3.0.0 ===")
     init_db()
@@ -116,6 +118,13 @@ def startup():
     load_reference_distribution()
     logger.info(f"Store: {get_store_stats()}")
     logger.info("=== Ready ===")
+@asynccontextmanager
+async def app_lifespan(app_instance: FastAPI):
+    startup()
+    yield
+
+
+app.router.lifespan_context = app_lifespan
 
 
 # =============================================
@@ -280,7 +289,7 @@ def _bg_audit(txn_id, sender, receiver, amount, fraud_score, decision, risk_leve
 
 @app.post("/predict", response_model=PredictionResponse,
           summary="Predict fraud for a single transaction",
-          description="Runs the full 8-step pipeline: validate → features → rules → ML → decide → explain → device → graph")
+          description="Runs the full 8-step pipeline: validate ΓåÆ features ΓåÆ rules ΓåÆ ML ΓåÆ decide ΓåÆ explain ΓåÆ device ΓåÆ graph")
 @limiter.limit("100/minute")
 async def predict(
     request: Request,
@@ -526,9 +535,12 @@ async def verify_biometric_endpoint(
     method = body.get("method", "fingerprint")
     if not txn_id:
         raise HTTPException(status_code=422, detail="transaction_id is required")
-    if method not in ("fingerprint", "face", "iris"):
-        raise HTTPException(status_code=422, detail="method must be one of: fingerprint, face, iris")
-    result = verify_biometric(txn_id, method=method)
+    if method not in ("fingerprint", "face", "iris", "pin"):
+        raise HTTPException(status_code=422, detail="method must be one of: fingerprint, face, iris, pin")
+    resolved_method = "fingerprint" if method == "pin" else method
+    result = verify_biometric(txn_id, method=resolved_method)
+    if method == "pin":
+        result["method"] = "pin"
     if result["verification_status"] == "ERROR":
         raise HTTPException(status_code=404, detail=result["message"])
     return result
@@ -637,7 +649,7 @@ async def health():
 async def liveness():
     return {"status": "alive"}
 
-@app.get("/health/ready", summary="Readiness probe — checks all subsystems")
+@app.get("/health/ready", summary="Readiness probe ΓÇö checks all subsystems")
 async def readiness():
     checks = {}
     all_ok = True

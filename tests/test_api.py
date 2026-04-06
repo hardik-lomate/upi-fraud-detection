@@ -4,6 +4,8 @@ import pytest
 import sys
 import os
 
+from feature_contract import MODEL_VERSION
+
 # Set dev mode env vars before importing the app
 os.environ["AUTH_REQUIRED"] = "false"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-ci-only-32chars"
@@ -50,7 +52,7 @@ def test_predict_legitimate(client):
     data = r.json()
     assert "fraud_score" in data
     assert "decision" in data
-    assert data["model_version"] == "2.0.0"
+    assert data["model_version"] == MODEL_VERSION
 
 
 def test_predict_self_transfer_blocked(client):
