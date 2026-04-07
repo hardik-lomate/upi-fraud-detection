@@ -19,6 +19,19 @@ def log_pipeline_decision(ctx) -> None:
     decision_for_log = str(getattr(ctx, "bank_decision", "") or getattr(ctx, "decision", "ALLOW")).upper()
     risk_level = str(getattr(ctx, "risk_level", "LOW") or "LOW")
 
+    component_scores = {
+        "rules": float(getattr(ctx, "rules_score", 0.0) or 0.0),
+        "ml": float(getattr(ctx, "ml_score", 0.0) or 0.0),
+        "behavior": float(getattr(ctx, "behavior_score", 0.0) or 0.0),
+        "graph": float(getattr(ctx, "graph_score", 0.0) or 0.0),
+    }
+    risk_components = dict(getattr(ctx, "risk_components", {}) or {})
+    audit_features = dict(getattr(ctx, "features", {}) or {})
+    audit_features["_component_scores"] = component_scores
+    if risk_components:
+        audit_features["_risk_components"] = risk_components
+    audit_features["_decision_mode"] = str(getattr(ctx, "decision_mode", "") or "legacy")
+
     log_prediction(
         transaction_id=str(ctx.txn_id),
         sender_upi=str((ctx.raw_txn or {}).get("sender_upi") or ""),
@@ -29,6 +42,6 @@ def log_pipeline_decision(ctx) -> None:
         risk_level=risk_level,
         reasons=[str(x) for x in (getattr(ctx, "reasons", []) or [])[:5]],
         rules_triggered=rules_names,
-        features=dict(getattr(ctx, "features", {}) or {}),
+        features=audit_features,
         timestamp=str(getattr(ctx, "timestamp", "") or ""),
     )

@@ -14,6 +14,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from feature_contract import RISK_COMPONENT_WEIGHTS
 
 
+WEIGHT_JUSTIFICATION = {
+    "rules": "Hard-coded policy and compliance guardrails.",
+    "ml": "Primary probabilistic signal from trained ensemble.",
+    "behavior": "Behavioral drift/velocity anomaly signal.",
+    "graph": "Graph-topology mule/network-risk signal.",
+}
+
+
 def _clamp01(v: float) -> float:
     return max(0.0, min(1.0, float(v)))
 
@@ -85,4 +93,6 @@ def combine_risk_scores(
         "components": components,
         "weights": {k: round(v, 6) for k, v in w.items()},
         "contributions": contributions,
+        "input_normalization": "All component scores are clamped to [0,1]; weights are normalized to sum=1.0",
+        "weight_justification": dict(WEIGHT_JUSTIFICATION),
     }

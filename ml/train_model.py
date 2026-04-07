@@ -5,6 +5,7 @@ from datetime import datetime
 
 import joblib
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import shap
 from lightgbm import LGBMClassifier
@@ -126,9 +127,20 @@ def main():
     xgb_proba = _safe_proba(xgb_model, x_test)
     cat_proba = _safe_proba(cat_model, x_test) if cat_model is not None else None
 
-    raw_iso = iso_model.decision_function(x_test)
-    # Higher anomaly => higher risk probability
-    iso_proba = 1.0 / (1.0 + (2.718281828 ** raw_iso))
+    iso_train_raw = np.asarray(iso_model.decision_function(x_train), dtype=float)
+    iso_min = float(np.min(iso_train_raw))
+    iso_max = float(np.max(iso_train_raw))
+    iso_denom = max(iso_max - iso_min, 1e-9)
+    iso_calibration = {
+        "method": "minmax_inverse",
+        "min": iso_min,
+        "max": iso_max,
+    }
+
+    raw_iso = np.asarray(iso_model.decision_function(x_test), dtype=float)
+    # Calibrated: lower decision_function means more anomalous (higher risk).
+    iso_proba = 1.0 - ((raw_iso - iso_min) / iso_denom)
+    iso_proba = np.clip(iso_proba, 0.0, 1.0)
 
     weights = dict(ENSEMBLE_DEFAULTS)
     used_weights = {
@@ -155,13 +167,16 @@ def main():
         "accuracy": float(accuracy_score(y_test, y_pred)),
         "precision": float(precision_score(y_test, y_pred, zero_division=0)),
         "recall": float(recall_score(y_test, y_pred, zero_division=0)),
-        "f1": float(f1_score(y_test, y_pred, zero_division=0)),
+        "f1_score": float(f1_score(y_test, y_pred, zero_division=0)),
         "roc_auc": float(roc_auc_score(y_test, y_proba)),
         "pr_auc": float(average_precision_score(y_test, y_proba)),
         "confusion_matrix": cm.tolist(),
         "classification_report": report,
         "weights_used": used_weights,
+        "iso_calibration": iso_calibration,
     }
+    # Backward-compatible alias retained for older readers.
+    metrics["f1"] = metrics["f1_score"]
 
     os.makedirs("ml/models", exist_ok=True)
     os.makedirs("ml/reports", exist_ok=True)
@@ -171,6 +186,7 @@ def main():
     if cat_model is not None:
         joblib.dump(cat_model, "ml/models/catboost_model.pkl")
     joblib.dump(iso_model, "ml/models/isolation_forest_model.pkl")
+    joblib.dump(iso_calibration, "ml/models/iso_calibration.pkl")
     joblib.dump(FEATURE_COLUMNS, "ml/models/feature_columns.pkl")
     joblib.dump(used_weights, "ml/models/ensemble_weights.pkl")
 
@@ -187,7 +203,8 @@ def main():
             "accuracy": metrics["accuracy"],
             "precision": metrics["precision"],
             "recall": metrics["recall"],
-            "f1": metrics["f1"],
+            "f1_score": metrics["f1_score"],
+            "f1": metrics["f1_score"],
             "roc_auc": metrics["roc_auc"],
             "pr_auc": metrics["pr_auc"],
         },
@@ -207,7 +224,20 @@ def main():
     joblib.dump(explainer, "ml/models/shap_explainer.pkl")
 
     print("Training complete")
-    print(json.dumps({k: metrics[k] for k in ["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"]}, indent=2))
+    print(
+        json.dumps(
+            {
+                "accuracy": metrics["accuracy"],
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
+                "f1_score": metrics["f1_score"],
+                "confusion_matrix": metrics["confusion_matrix"],
+                "roc_auc": metrics["roc_auc"],
+                "pr_auc": metrics["pr_auc"],
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

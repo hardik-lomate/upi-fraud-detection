@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from statistics import mean
+import json
 import os
 import sys
 
@@ -187,10 +188,19 @@ def main() -> None:
         }
         results.append(result)
 
+        required_payload = {
+            "transaction_id": result["transaction_id"],
+            "risk_score": result["risk_score"],
+            "decision": result["decision"],
+            "component_scores": result["component_scores"],
+            "reason": result["reason"],
+        }
+
         print(
             f"{idx:02d} | kind={result['kind']:<6} | risk_score={result['risk_score']:.4f} "
             f"| decision={result['decision']:<7} | txn={result['transaction_id']} | {result['name']}"
         )
+        print(f"      OUTPUT={json.dumps(required_payload, ensure_ascii=False)}")
 
     normal_scores = [r["risk_score"] for r in results if r["kind"] == "normal"]
     fraud_scores = [r["risk_score"] for r in results if r["kind"] == "fraud"]
