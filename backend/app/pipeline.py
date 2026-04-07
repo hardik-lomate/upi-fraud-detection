@@ -163,6 +163,7 @@ def step_extract_features(ctx: PipelineContext, extract_fn) -> PipelineContext:
                 extracted[col] = 0.0
 
         ctx.features = extracted
+        ctx.processing_steps.append("feature_validation")
 
         missing_model_columns = validate_feature_dict(ctx.features)
         for col in missing_model_columns:

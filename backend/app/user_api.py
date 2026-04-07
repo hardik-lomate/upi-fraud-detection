@@ -18,7 +18,7 @@ from .pipeline import run_pipeline
 from .feature_extract import extract_features
 from .rules_engine import evaluate_rules, get_rule_decision
 from .predict import predict_fraud
-from .explainability import explain_prediction, format_reasons
+from .explainability_engine import explain_prediction, format_reasons
 from .behavioral_engine import analyze_behavioral_risk
 from .graph_engine import score_graph_risk
 from .risk_engine import compute_rules_score, combine_risk_scores

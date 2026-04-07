@@ -44,7 +44,7 @@ from .database import (
     FraudHistory,
 )
 from .rules_engine import evaluate_rules, get_rule_decision
-from .explainability import explain_prediction, format_reasons
+from .explainability_engine import explain_prediction, format_reasons
 from .shap_service import load_shap_explainer
 from .audit import log_prediction, get_audit_logs, get_prediction_audit_record
 from .auth import get_current_client, check_permission, create_access_token
@@ -488,6 +488,7 @@ def _ctx_to_bank_response(ctx) -> dict:
       risk_score,
       decision: ALLOW|BLOCK|STEP-UP,
       reason: [...],
+            component_scores: {rules, ml, behavior, graph},
       feature_summary: {...}
     }
     """
@@ -500,6 +501,13 @@ def _ctx_to_bank_response(ctx) -> dict:
     reasons = list(getattr(ctx, "reasons", []) or [])
     if not reasons:
         reasons = list(getattr(ctx, "decision_reasons", []) or [])
+
+    component_scores = {
+        "rules": round(float(getattr(ctx, "rules_score", 0.0) or 0.0), 4),
+        "ml": round(float(getattr(ctx, "ml_score", 0.0) or 0.0), 4),
+        "behavior": round(float(getattr(ctx, "behavior_score", 0.0) or 0.0), 4),
+        "graph": round(float(getattr(ctx, "graph_score", 0.0) or 0.0), 4),
+    }
 
     summary = {
         "rules_score": float(getattr(ctx, "rules_score", 0.0) or 0.0),
@@ -522,6 +530,7 @@ def _ctx_to_bank_response(ctx) -> dict:
         "risk_score": round(bank_score, 4),
         "decision": decision,
         "reason": reasons[:5] if reasons else ["No strong risk signals detected"],
+        "component_scores": component_scores,
         "feature_summary": summary,
     }
 

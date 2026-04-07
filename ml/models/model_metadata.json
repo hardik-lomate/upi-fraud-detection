@@ -1,9 +1,7 @@
 {
-  "model_version": "2.0.0",
-  "trained_at": "2026-04-03T21:50:22.926272",
-  "training_data_rows": 80000,
-  "test_data_rows": 20000,
-  "training_fraud_rate": 0.03,
+  "trained_at": "2026-04-07T20:15:21.968762Z",
+  "training_rows": 100000,
+  "feature_count": 32,
   "feature_columns": [
     "amount",
     "hour",
@@ -12,79 +10,39 @@
     "is_weekend",
     "txn_type_encoded",
     "sender_txn_count_24h",
+    "sender_txn_count_1h",
+    "sender_txn_count_1min",
     "sender_avg_amount",
     "sender_std_amount",
+    "sender_max_amount_7d",
     "amount_deviation",
+    "amount_to_avg_ratio",
+    "amount_percentile_sender",
     "sender_unique_receivers_24h",
+    "sender_unique_receivers_7d",
     "is_new_device",
-    "is_new_receiver"
+    "is_new_receiver",
+    "receiver_seen_count",
+    "receiver_new_sender_ratio_24h",
+    "sender_velocity_1min",
+    "sender_velocity_5min",
+    "geo_distance_km",
+    "is_impossible_travel",
+    "vpa_suffix_risk_score",
+    "upi_age_days",
+    "cross_bank_flag",
+    "is_high_risk_hour",
+    "txn_amount_rank_7d",
+    "sender_fraud_score_history",
+    "receiver_fraud_flag_count"
   ],
-  "ensemble_weights": {
-    "xgboost": 0.45,
-    "lightgbm": 0.35,
-    "isolation_forest": 0.2
-  },
-  "thresholds": {
-    "threshold_flag": 0.9278,
-    "threshold_block": 0.8833,
-    "flag_precision": 1.0,
-    "flag_recall": 0.9,
-    "block_precision": 1.0,
-    "block_recall": 1.0,
-    "block_f05": 1.0
-  },
-  "per_model_metrics": {
-    "xgboost": {
-      "roc_auc": 1.0,
-      "pr_auc": 1.0,
-      "cv_roc_auc_mean": 1.0,
-      "cv_roc_auc_std": 0.0
-    },
-    "lightgbm": {
-      "roc_auc": 1.0,
-      "pr_auc": 1.0,
-      "cv_roc_auc_mean": 1.0,
-      "cv_roc_auc_std": 0.0
-    },
-    "isolation_forest": {
-      "roc_auc": 0.9977
-    }
-  },
-  "ensemble_metrics": {
+  "fraud_ratio": 0.03,
+  "metrics": {
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
     "roc_auc": 1.0,
-    "pr_auc": 1.0,
-    "f1_at_block": 1.0,
-    "precision_at_block": 1.0,
-    "recall_at_block": 1.0
-  },
-  "top_features": [
-    {
-      "name": "is_new_device",
-      "importance": 0.7833
-    },
-    {
-      "name": "hour",
-      "importance": 0.0796
-    },
-    {
-      "name": "is_night",
-      "importance": 0.0473
-    },
-    {
-      "name": "sender_unique_receivers_24h",
-      "importance": 0.0306
-    },
-    {
-      "name": "sender_std_amount",
-      "importance": 0.0245
-    }
-  ],
-  "iso_calibration": {
-    "min": -0.13562247374432923,
-    "max": 0.21721414335382389
-  },
-  "class_distribution": {
-    "fraud": 2400,
-    "legit": 77600
+    "pr_auc": 1.0
   }
 }

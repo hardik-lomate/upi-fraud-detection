@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from datetime import datetime
 
 import joblib
 import matplotlib.pyplot as plt
@@ -22,7 +23,7 @@ from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from feature_contract import ENSEMBLE_DEFAULTS, FEATURE_COLUMNS
+from feature_contract import ENSEMBLE_DEFAULTS, FEATURE_COLUMNS, validate_feature_schema
 
 try:
     from catboost import CatBoostClassifier
@@ -34,10 +35,32 @@ def _safe_proba(model, x):
     return model.predict_proba(x)[:, 1]
 
 
+def _validate_training_inputs(df: pd.DataFrame) -> None:
+    missing = [col for col in FEATURE_COLUMNS if col not in df.columns]
+    if missing:
+        raise ValueError(f"Training data missing required feature columns: {missing}")
+    if "is_fraud" not in df.columns:
+        raise ValueError("Training data must include target column: is_fraud")
+
+    if len(df) == 0:
+        raise ValueError("Training data is empty")
+
+    sample = {}
+    row = df.iloc[0]
+    for col in FEATURE_COLUMNS:
+        sample[col] = float(pd.to_numeric(row[col], errors="coerce") if pd.notna(row[col]) else 0.0)
+
+    contract = validate_feature_schema(sample, allow_extra=False)
+    if not contract.get("is_valid", False):
+        raise ValueError(f"Feature contract validation failed for training sample: {contract}")
+
+
 def main():
     df = pd.read_csv("ml/data/processed/features.csv")
-    x = df[FEATURE_COLUMNS]
-    y = df["is_fraud"]
+    _validate_training_inputs(df)
+
+    x = df[FEATURE_COLUMNS].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    y = pd.to_numeric(df["is_fraud"], errors="coerce").fillna(0).astype(int)
 
     x_train, x_test, y_train, y_test = train_test_split(
         x,
@@ -153,6 +176,24 @@ def main():
 
     with open("ml/models/metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
+
+    metadata = {
+        "trained_at": datetime.utcnow().isoformat() + "Z",
+        "training_rows": int(len(df)),
+        "feature_count": int(len(FEATURE_COLUMNS)),
+        "feature_columns": list(FEATURE_COLUMNS),
+        "fraud_ratio": float(y.mean()),
+        "metrics": {
+            "accuracy": metrics["accuracy"],
+            "precision": metrics["precision"],
+            "recall": metrics["recall"],
+            "f1": metrics["f1"],
+            "roc_auc": metrics["roc_auc"],
+            "pr_auc": metrics["pr_auc"],
+        },
+    }
+    with open("ml/models/model_metadata.json", "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
 
     # SHAP export from LightGBM (primary model)
     explainer = shap.TreeExplainer(lgbm_model)

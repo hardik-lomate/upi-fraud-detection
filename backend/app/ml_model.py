@@ -6,7 +6,13 @@ pipeline does not depend on lower-level ensemble implementation details.
 
 from __future__ import annotations
 
+import os
+import sys
+
 from .predict import load_all_models, predict_fraud
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+from feature_contract import validate_feature_schema
 
 
 _MODELS_READY = False
@@ -31,6 +37,10 @@ def predict_ml_probability(features: dict) -> dict:
       "weights": dict
     }
     """
+    contract = validate_feature_schema(features or {}, allow_extra=True)
+    if not contract.get("is_valid", False):
+        raise ValueError(f"Prediction feature contract violation: missing {contract.get('missing', [])}")
+
     _ensure_models_loaded()
     raw = predict_fraud(features)
     return {
