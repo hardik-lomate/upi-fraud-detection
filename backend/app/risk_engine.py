@@ -5,7 +5,10 @@ risk_score = (rules_score * 0.3) + (ml_score * 0.4) + (behavior_score * 0.2) + (
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict
+from functools import lru_cache
+from pathlib import Path
 
 import sys
 import os
@@ -20,6 +23,31 @@ WEIGHT_JUSTIFICATION = {
     "behavior": "Behavioral drift/velocity anomaly signal.",
     "graph": "Graph-topology mule/network-risk signal.",
 }
+
+DEFAULT_WEIGHT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "risk_weights.json"
+
+
+@lru_cache(maxsize=1)
+def _load_weight_config() -> dict:
+    cfg_path = os.getenv("RISK_WEIGHTS_PATH", "").strip()
+    path = Path(cfg_path) if cfg_path else DEFAULT_WEIGHT_CONFIG_PATH
+
+    if not path.exists():
+        return {}
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if not isinstance(payload, dict):
+            return {}
+        return {
+            k: float(v)
+            for k, v in payload.items()
+            if k in RISK_COMPONENT_WEIGHTS
+        }
+    except Exception:
+        # Never fail scoring due to config parsing issues.
+        return {}
 
 
 def _clamp01(v: float) -> float:
@@ -56,6 +84,9 @@ def combine_risk_scores(
     weights: Dict[str, float] | None = None,
 ) -> dict:
     w = dict(RISK_COMPONENT_WEIGHTS)
+    file_weights = _load_weight_config()
+    if file_weights:
+        w.update(file_weights)
     if weights:
         w.update({k: float(v) for k, v in weights.items() if k in w})
 
@@ -93,6 +124,7 @@ def combine_risk_scores(
         "components": components,
         "weights": {k: round(v, 6) for k, v in w.items()},
         "contributions": contributions,
+        "weight_source": str(os.getenv("RISK_WEIGHTS_PATH", "").strip() or DEFAULT_WEIGHT_CONFIG_PATH),
         "input_normalization": "All component scores are clamped to [0,1]; weights are normalized to sum=1.0",
         "weight_justification": dict(WEIGHT_JUSTIFICATION),
     }

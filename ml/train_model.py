@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 import joblib
 import matplotlib.pyplot as plt
@@ -30,6 +31,9 @@ try:
     from catboost import CatBoostClassifier
 except Exception:
     CatBoostClassifier = None
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
 def _safe_proba(model, x):
@@ -191,6 +195,12 @@ def main():
     joblib.dump(used_weights, "ml/models/ensemble_weights.pkl")
 
     with open("ml/models/metrics.json", "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=2)
+
+    with open(ROOT_DIR / "metrics_report.json", "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=2)
+
+    with open("ml/models/metrics_report.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
     metadata = {
