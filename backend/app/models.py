@@ -100,6 +100,16 @@ class PredictionResponse(BaseModel):
     }
 
 
+class BankPredictionResponse(BaseModel):
+    """Bank-side real-time fraud response contract."""
+
+    transaction_id: str
+    risk_score: float = Field(..., ge=0.0, le=1.0)
+    decision: Literal["ALLOW", "BLOCK", "STEP-UP"]
+    reason: list[str] = Field(default=[], description="Explainable factors driving final action")
+    feature_summary: dict = Field(default={}, description="Key contributing features and component scores")
+
+
 class TokenRequest(BaseModel):
     api_key: str = Field(..., description="Your API key from api_keys.json")
 

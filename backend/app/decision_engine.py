@@ -11,7 +11,12 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-from feature_contract import THRESHOLD_WARN, THRESHOLD_BLOCK
+from feature_contract import (
+    THRESHOLD_WARN,
+    THRESHOLD_BLOCK,
+    BANK_STEP_UP_THRESHOLD,
+    BANK_BLOCK_THRESHOLD,
+)
 
 from .database import get_sender_90d_amount_profile
 
@@ -297,3 +302,24 @@ def make_decision_simple(fraud_score: float) -> tuple:
     if fraud_score <= 0.7:
         return ("VERIFY", "MEDIUM", "Verification required.")
     return ("VERIFY", "HIGH", "Verification required.")
+
+
+def make_bank_decision(
+    risk_score: float,
+    step_up_threshold: float = BANK_STEP_UP_THRESHOLD,
+    block_threshold: float = BANK_BLOCK_THRESHOLD,
+) -> tuple[str, str, str]:
+    """Bank-side final decision contract.
+
+    Returns: (decision, risk_level, message)
+    decision in: ALLOW | STEP-UP | BLOCK
+    """
+    score = _clamp(float(risk_score or 0.0))
+
+    if score > float(block_threshold):
+        return ("BLOCK", "HIGH", "Blocked for safety due to high fraud risk.")
+
+    if score > float(step_up_threshold):
+        return ("STEP-UP", "MEDIUM", "Step-up authentication required before completion.")
+
+    return ("ALLOW", "LOW", "Approved.")

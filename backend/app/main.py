@@ -26,7 +26,7 @@ from feature_contract import MODEL_VERSION, THRESHOLD_BLOCK, get_risk_tier
 
 from .models import (
     TransactionRequest, PredictionResponse, TokenRequest, TokenResponse,
-    RuleDetail, DeviceAnomaly, GraphInfo, RiskBreakdown,
+    RuleDetail, DeviceAnomaly, GraphInfo, RiskBreakdown, BankPredictionResponse,
     FeedbackRequest, BatchPredictSummary,
 )
 from .predict import predict_fraud, load_all_models, get_metadata
@@ -60,6 +60,11 @@ from .device_fingerprint import check_device_anomalies, update_device_history
 from .graph_features import get_graph
 from .pipeline import run_pipeline
 from .pipeline import PipelineContext, step_validate
+from .behavioral_engine import analyze_behavioral_risk
+from .graph_engine import score_graph_risk
+from .risk_engine import compute_rules_score, combine_risk_scores
+from .audit_logger import log_pipeline_decision
+from .ml_model import predict_ml_probability
 from .feedback import save_feedback, get_feedback_stats
 from .live_feed import live_feed_handler
 from .biometric import verify_biometric
@@ -394,20 +399,31 @@ def _compute_risk_breakdown(ctx) -> RiskBreakdown:
     return RiskBreakdown(behavioral=behavioral, temporal=temporal, network=network, device=device)
 
 
-def _run_prediction(txn_dict: dict):
+def _run_prediction(
+    txn_dict: dict,
+    decision_mode: str = "legacy",
+    enable_pipeline_audit: bool = False,
+    predict_fn_override=None,
+):
     """Run the full pipeline on a transaction dict and return ctx."""
     return run_pipeline(
         txn_dict=txn_dict,
         extract_fn=extract_features,
         evaluate_rules_fn=evaluate_rules,
         get_rule_decision_fn=get_rule_decision,
-        predict_fn=predict_fraud,
+        predict_fn=predict_fn_override or predict_fraud,
         explain_fn=explain_prediction,
         format_reasons_fn=format_reasons,
         check_device_fn=check_device_anomalies,
         update_device_fn=update_device_history,
         sender_history=None,
         graph=get_graph(),
+        behavior_fn=analyze_behavioral_risk,
+        graph_score_fn=score_graph_risk,
+        rules_score_fn=compute_rules_score,
+        combine_risk_fn=combine_risk_scores,
+        audit_fn=log_pipeline_decision if enable_pipeline_audit else None,
+        decision_mode=decision_mode,
     )
 
 
@@ -461,6 +477,53 @@ def _ctx_to_precheck_response(ctx, pre_check_id: str, latency_ms: float) -> dict
         }
     )
     return response
+
+
+def _ctx_to_bank_response(ctx) -> dict:
+    """Return bank-side response contract.
+
+    Contract:
+    {
+      transaction_id,
+      risk_score,
+      decision: ALLOW|BLOCK|STEP-UP,
+      reason: [...],
+      feature_summary: {...}
+    }
+    """
+    bank_score = float(getattr(ctx, "bank_risk_score", 0.0) or getattr(ctx, "risk_score", 0.0) or 0.0)
+    decision = str(getattr(ctx, "bank_decision", "") or "").upper()
+    if not decision:
+        legacy = str(getattr(ctx, "decision", "ALLOW") or "ALLOW").upper()
+        decision = "STEP-UP" if legacy == "VERIFY" else legacy
+
+    reasons = list(getattr(ctx, "reasons", []) or [])
+    if not reasons:
+        reasons = list(getattr(ctx, "decision_reasons", []) or [])
+
+    summary = {
+        "rules_score": float(getattr(ctx, "rules_score", 0.0) or 0.0),
+        "ml_score": float(getattr(ctx, "ml_score", 0.0) or 0.0),
+        "behavior_score": float(getattr(ctx, "behavior_score", 0.0) or 0.0),
+        "graph_score": float(getattr(ctx, "graph_score", 0.0) or 0.0),
+        "risk_components": dict(getattr(ctx, "risk_components", {}) or {}),
+        "key_features": {
+            "amount": float((ctx.features or {}).get("amount", 0.0) or 0.0),
+            "is_new_device": int((ctx.features or {}).get("is_new_device", 0) or 0),
+            "is_new_receiver": int((ctx.features or {}).get("is_new_receiver", 0) or 0),
+            "sender_txn_count_1min": float((ctx.features or {}).get("sender_txn_count_1min", 0.0) or 0.0),
+            "is_impossible_travel": int((ctx.features or {}).get("is_impossible_travel", 0) or 0),
+            "receiver_fraud_flag_count": int((ctx.features or {}).get("receiver_fraud_flag_count", 0) or 0),
+        },
+    }
+
+    return {
+        "transaction_id": str(ctx.txn_id),
+        "risk_score": round(bank_score, 4),
+        "decision": decision,
+        "reason": reasons[:5] if reasons else ["No strong risk signals detected"],
+        "feature_summary": summary,
+    }
 
 
 def _bg_audit(txn_id, sender, receiver, amount, fraud_score, decision, risk_level,
@@ -615,6 +678,68 @@ async def predict(
     except Exception as e:
         logger.exception(f"Prediction failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    "/api/v2/bank/predict",
+    response_model=BankPredictionResponse,
+    summary="Bank-side real-time fraud decision",
+    description=(
+        "Unified decision pipeline: feature_extraction -> rules -> ml -> behavior -> graph -> "
+        "risk_scoring -> decision -> audit"
+    ),
+)
+@limiter.limit("120/minute")
+async def bank_predict(
+    request: Request,
+    txn: TransactionRequest,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "predict")
+    started = time.perf_counter()
+
+    try:
+        ctx = _run_prediction(
+            txn.model_dump(),
+            decision_mode="bank",
+            enable_pipeline_audit=True,
+            predict_fn_override=predict_ml_probability,
+        )
+        if ctx.errors:
+            logger.warning("Bank pipeline warnings txn=%s: %s", ctx.txn_id, ctx.errors)
+
+        # Monitor bank-side score stream.
+        record_prediction(float(ctx.bank_risk_score or ctx.fraud_score or 0.0), ctx.features)
+
+        response = _ctx_to_bank_response(ctx)
+
+        storage_decision = "VERIFY" if response["decision"] == "STEP-UP" else response["decision"]
+        save_transaction(
+            ctx.txn_id,
+            txn.sender_upi,
+            txn.receiver_upi,
+            txn.amount,
+            float(response["risk_score"]),
+            storage_decision,
+            ctx.timestamp,
+            ctx.raw_txn.get("sender_device_id") or "",
+            status=_internal_status_from_decision(storage_decision),
+            response_json=json.dumps(response, ensure_ascii=False, separators=(",", ":")),
+        )
+
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        record_latency(elapsed_ms, cache_hit=False)
+        logger.info(
+            "bank_predict txn=%s decision=%s risk_score=%.4f latency_ms=%.2f",
+            response.get("transaction_id"),
+            response.get("decision"),
+            float(response.get("risk_score") or 0.0),
+            elapsed_ms,
+        )
+        return BankPredictionResponse(**response)
+    except Exception as exc:
+        logger.exception("bank_predict failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Unable to process bank-side prediction")
 
 
 @app.post(

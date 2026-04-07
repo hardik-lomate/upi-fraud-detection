@@ -82,6 +82,18 @@ THRESHOLD_HIGH = 0.75
 THRESHOLD_BLOCK = 0.75
 THRESHOLD_WARN = 0.40
 
+# Bank-side decision thresholds (single risk-score decision contract)
+BANK_STEP_UP_THRESHOLD = 0.60
+BANK_BLOCK_THRESHOLD = 0.80
+
+# Unified risk score component weights
+RISK_COMPONENT_WEIGHTS = {
+    "rules": 0.30,
+    "ml": 0.40,
+    "behavior": 0.20,
+    "graph": 0.10,
+}
+
 # Backward-compatible aliases used by older code paths
 THRESHOLD_FLAG = THRESHOLD_WARN
 
@@ -117,6 +129,25 @@ def get_risk_tier(score: float) -> str:
     if score >= THRESHOLD_WARN:
         return "MEDIUM"
     return "LOW"
+
+
+def validate_feature_schema(features: dict, allow_extra: bool = True) -> dict:
+    """Validate runtime features against canonical FEATURE_COLUMNS.
+
+    Returns a normalized validation payload so callers can decide whether to
+    hard-fail or soft-fail based on environment.
+    """
+    features = features or {}
+    missing = [col for col in FEATURE_COLUMNS if col not in features]
+    extra = [key for key in features.keys() if key not in FEATURE_COLUMNS]
+    is_valid = (len(missing) == 0) and (allow_extra or len(extra) == 0)
+    return {
+        "is_valid": is_valid,
+        "missing": missing,
+        "extra": extra,
+        "required_count": len(FEATURE_COLUMNS),
+        "provided_count": len(features),
+    }
 
 # ======================================================================
 # MODEL CONFIG

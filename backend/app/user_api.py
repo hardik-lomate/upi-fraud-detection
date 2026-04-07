@@ -19,6 +19,9 @@ from .feature_extract import extract_features
 from .rules_engine import evaluate_rules, get_rule_decision
 from .predict import predict_fraud
 from .explainability import explain_prediction, format_reasons
+from .behavioral_engine import analyze_behavioral_risk
+from .graph_engine import score_graph_risk
+from .risk_engine import compute_rules_score, combine_risk_scores
 from .device_fingerprint import check_device_anomalies, update_device_history
 from .graph_features import get_graph
 from .database import (
@@ -138,6 +141,10 @@ def _run_prediction(txn_dict: dict):
         update_device_fn=update_device_history,
         sender_history=None,
         graph=get_graph(),
+        behavior_fn=analyze_behavioral_risk,
+        graph_score_fn=score_graph_risk,
+        rules_score_fn=compute_rules_score,
+        combine_risk_fn=combine_risk_scores,
     )
 
 
