@@ -1,5 +1,5 @@
 {
-  "trained_at": "2026-04-07T21:50:27.400535Z",
+  "trained_at": "2026-04-07T22:02:17.799072Z",
   "dataset_path": "data\\fraud_dataset.csv",
   "rows": 6000,
   "feature_count": 32,
@@ -38,12 +38,12 @@
     "receiver_fraud_flag_count"
   ],
   "metrics": {
-    "accuracy": 0.9766666666666667,
-    "precision": 0.9418604651162791,
-    "recall": 0.9,
-    "f1_score": 0.9204545454545455
+    "accuracy": 0.9741666666666666,
+    "precision": 0.8669950738916257,
+    "recall": 0.9777777777777777,
+    "f1_score": 0.9190600522193212
   },
-  "threshold": 0.79,
+  "threshold": 0.35,
   "weights": {
     "lightgbm": 0.55,
     "xgboost": 0.45,

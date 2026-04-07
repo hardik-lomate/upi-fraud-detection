@@ -40,6 +40,7 @@ FRAUD_PATTERNS = [
     "large_amount_deviation",
     "high_failed_attempts",
     "suspicious_graph_connections",
+    "behavioral_anomaly_low_behavior_score",
 ]
 
 TXN_TYPES = ["purchase", "transfer", "bill_payment", "recharge"]
@@ -193,6 +194,19 @@ def generate_dataset(
                 txn_type = "transfer"
                 receiver_upi = f"mule.collector.{idx % 40}@upi"
 
+            elif pattern == "behavioral_anomaly_low_behavior_score":
+                amount = float(avg_amount * rng.uniform(6.0, 14.0))
+                transaction_velocity = max(transaction_velocity, int(rng.integers(12, 36)))
+                failed_attempts += int(rng.integers(8, 20))
+                is_new_device = 1
+                device_id = f"DEV_BEHAV_{idx:06d}"
+                merchant_risk = max(merchant_risk, float(rng.uniform(0.78, 0.96)))
+                graph_risk = max(graph_risk, float(rng.uniform(0.72, 0.95)))
+                suspicious_hour = int(rng.choice([0, 1, 2, 3, 4, 23]))
+                ts = ts.replace(hour=suspicious_hour, minute=int(rng.integers(0, 60)))
+                txn_type = "transfer"
+                receiver_upi = f"behavior.anomaly.support.{idx % 180}@upi"
+
         if label == 0 and rng.random() < 0.92:
             hour = int(rng.integers(7, 22))
             ts = ts.replace(hour=hour, minute=int(rng.integers(0, 60)))
@@ -214,6 +228,10 @@ def generate_dataset(
             + (0.15 * min(failed_attempts / 12.0, 1.0))
             + (0.10 * location_shift)
         )
+
+        if label == 1 and pattern == "behavioral_anomaly_low_behavior_score":
+            # For this pattern, behavior_score is a stability signal where lower means anomaly.
+            behavior_score = float(rng.uniform(0.02, 0.15))
 
         generated.append(
             {

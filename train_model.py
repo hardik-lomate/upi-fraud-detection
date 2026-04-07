@@ -26,10 +26,6 @@ MODEL_DIR = Path("ml/models")
 METRICS_PATH = Path("metrics_report.json")
 
 
-def _sigmoid(x: np.ndarray) -> np.ndarray:
-  return 1.0 / (1.0 + np.exp(-x))
-
-
 def _require_dataset(path: Path) -> pd.DataFrame:
   if not path.exists():
     from generate_dataset import generate_dataset
@@ -61,6 +57,9 @@ def _require_dataset(path: Path) -> pd.DataFrame:
   missing = sorted(required - set(df.columns))
   if missing:
     raise ValueError(f"Dataset missing required columns: {missing}")
+
+  if "sender_upi" not in df.columns or "receiver_upi" not in df.columns:
+    raise ValueError("Dataset must include sender_upi and receiver_upi for serving-aligned feature extraction")
   return df
 
 
@@ -129,15 +128,8 @@ def _to_contract_features(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
 
     try:
       extracted = extract_features(txn)
-    except Exception:
-      # Safe fallback to keep training robust in edge rows.
-      extracted = {col: 0.0 for col in FEATURE_COLUMNS}
-      extracted["amount"] = amount
-      extracted["hour"] = int(ts.hour)
-      extracted["day_of_week"] = int(ts.dayofweek)
-      extracted["is_night"] = 1 if int(ts.hour) <= 5 else 0
-      extracted["is_weekend"] = 1 if int(ts.dayofweek) >= 5 else 0
-      extracted["txn_type_encoded"] = int(TXN_TYPE_MAP.get(tx_type, 1))
+    except Exception as exc:
+      raise RuntimeError(f"Feature extraction failed at row {idx}: {exc}") from exc
 
     normalized = {col: float(extracted.get(col, 0.0) or 0.0) for col in FEATURE_COLUMNS}
     features_rows.append(normalized)
@@ -161,20 +153,36 @@ def _validate_feature_alignment(features: pd.DataFrame) -> None:
 
 
 def _select_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
-  thresholds = np.linspace(0.20, 0.80, 61)
-  best = None
+  thresholds = np.linspace(0.10, 0.90, 81)
+  best_target = None
+  best_precision_floor = None
+  best_f1 = None
 
   for t in thresholds:
     y_pred = (y_proba >= t).astype(int)
     precision = float(precision_score(y_true, y_pred, zero_division=0))
     recall = float(recall_score(y_true, y_pred, zero_division=0))
     f1 = float(f1_score(y_true, y_pred, zero_division=0))
-    meets_target = precision >= 0.85 and recall >= 0.85
-    rank = (1 if meets_target else 0, f1, precision, recall, -abs(t - 0.50))
-    if best is None or rank > best["rank"]:
-      best = {"threshold": float(t), "rank": rank}
 
-  return float(best["threshold"]) if best else 0.50
+    if precision >= 0.85 and recall >= 0.85:
+      rank_target = (recall, f1, precision, -abs(t - 0.50))
+      if best_target is None or rank_target > best_target["rank"]:
+        best_target = {"threshold": float(t), "rank": rank_target}
+
+    if precision >= 0.85:
+      rank_precision = (recall, f1, -abs(t - 0.50))
+      if best_precision_floor is None or rank_precision > best_precision_floor["rank"]:
+        best_precision_floor = {"threshold": float(t), "rank": rank_precision}
+
+    rank_f1 = (f1, precision, recall, -abs(t - 0.50))
+    if best_f1 is None or rank_f1 > best_f1["rank"]:
+      best_f1 = {"threshold": float(t), "rank": rank_f1}
+
+  if best_target is not None:
+    return float(best_target["threshold"])
+  if best_precision_floor is not None:
+    return float(best_precision_floor["threshold"])
+  return float(best_f1["threshold"]) if best_f1 is not None else 0.50
 
 
 def main() -> None:

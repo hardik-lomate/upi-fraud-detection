@@ -1,19 +1,19 @@
 {
-  "accuracy": 0.9766666666666667,
-  "precision": 0.9418604651162791,
-  "recall": 0.9,
-  "f1_score": 0.9204545454545455,
+  "accuracy": 0.9741666666666666,
+  "precision": 0.8669950738916257,
+  "recall": 0.9777777777777777,
+  "f1_score": 0.9190600522193212,
   "confusion_matrix": [
     [
-      1010,
-      10
+      993,
+      27
     ],
     [
-      18,
-      162
+      4,
+      176
     ]
   ],
-  "threshold": 0.79,
+  "threshold": 0.35,
   "class_distribution_train": {
     "negative": 4080,
     "positive": 720

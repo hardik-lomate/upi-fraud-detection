@@ -108,6 +108,23 @@ def _prime_context(run_tag: str, graph, base: datetime) -> None:
     )
     _run_pipeline(txn, graph)
 
+  # Prime f4 with sequence signatures that increase behavior pattern-risk.
+  # This creates round-amount burst + increment pattern + velocity ramp.
+  f4_sender = f"f4.{run_tag}@upi"
+  burst_amounts = [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0, 7000.0]
+  burst_minutes = [14, 15, 15, 16, 16, 16, 16]
+  for i, (amt, minute) in enumerate(zip(burst_amounts, burst_minutes)):
+    txn = _txn(
+      f4_sender,
+      f"burst.{i}.{run_tag}@upi",
+      amt,
+      "transfer",
+      base + timedelta(minutes=minute),
+      "F4_OLD_DEVICE",
+      *MUMBAI,
+    )
+    _run_pipeline(txn, graph)
+
   # Prime impossible-travel sender with a prior location.
   prior = _txn(
     f"f3.{run_tag}@upi",
@@ -187,8 +204,8 @@ def main() -> None:
     },
     {
       "kind": "fraud",
-      "name": "Mule network receiver",
-      "txn": _txn(f"f4.{run_tag}@upi", f"mule.collector.{run_tag}@upi", 91000.0, "transfer", base + timedelta(minutes=24), "F4_NEW_DEVICE", *MUMBAI),
+      "name": "Mule network + impossible travel attack",
+      "txn": _txn(f"f4.{run_tag}@upi", f"mule.collector.{run_tag}@upi", 91000.0, "transfer", base + timedelta(minutes=24), "F4_NEW_DEVICE", *DELHI),
     },
     {
       "kind": "fraud",
