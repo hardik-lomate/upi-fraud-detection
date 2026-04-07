@@ -149,3 +149,69 @@ def get_sender_receiver_vpa_risk(sender_upi: str, receiver_upi: str) -> dict:
         "receiver": receiver_analysis,
         "combined_vpa_risk": round(combined_score, 3),
     }
+
+
+def detect_scam_vpa_pattern(receiver_upi: str) -> dict:
+    """
+    Detect scam-like receiver UPI handle patterns used in social-engineering attacks.
+    Returns normalized detector payload for rules/features.
+    """
+    upi_id = (receiver_upi or "").strip().lower()
+    if "@" not in upi_id:
+        return {
+            "is_suspicious": True,
+            "pattern_matched": "invalid_upi_format",
+            "risk_score": 1.0,
+            "reason": "Receiver UPI format is invalid",
+        }
+
+    local, _, suffix = upi_id.partition("@")
+    keywords = ("bank", "helpline", "support", "care", "refund", "reward", "prize")
+
+    if any(k in local for k in keywords):
+        return {
+            "is_suspicious": True,
+            "pattern_matched": "impersonation_keyword",
+            "risk_score": 0.95,
+            "reason": "UPI handle contains bank/support style impersonation keywords",
+        }
+
+    if local.isdigit() and len(local) >= 6:
+        return {
+            "is_suspicious": True,
+            "pattern_matched": "all_digits_handle",
+            "risk_score": 0.90,
+            "reason": "UPI handle is mostly digits, typical of throwaway fraud IDs",
+        }
+
+    if suffix not in KNOWN_SUFFIXES:
+        return {
+            "is_suspicious": True,
+            "pattern_matched": "unknown_suffix",
+            "risk_score": 0.80,
+            "reason": "UPI suffix is not in the known PSP/bank list",
+        }
+
+    if len(local) > 30:
+        return {
+            "is_suspicious": True,
+            "pattern_matched": "very_long_handle",
+            "risk_score": 0.85,
+            "reason": "UPI handle length is unusually long",
+        }
+
+    if re.search(r"\d{4,}$", local):
+        return {
+            "is_suspicious": True,
+            "pattern_matched": "numeric_tail_pattern",
+            "risk_score": 0.78,
+            "reason": "UPI handle ends with a long numeric tail",
+        }
+
+    baseline = analyze_upi_id(upi_id)
+    return {
+        "is_suspicious": baseline.get("risk_score", 0.0) >= 0.5,
+        "pattern_matched": "none",
+        "risk_score": float(baseline.get("risk_score", 0.1)),
+        "reason": "UPI handle does not match known scam patterns",
+    }

@@ -1,7 +1,6 @@
 """
-UPI Fraud Detection API ΓÇö Main Application (v3.0.0).
+UPI Fraud Detection API — Main Application (v2.0.0).
 Central controller: pipeline.py. All features wired. Zero business logic here.
-4-model ensemble: XGBoost + LightGBM + CatBoost + IsolationForest.
 """
 
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request, WebSocket, UploadFile, File
@@ -9,18 +8,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Optional
 import logging
 import time
 import io
 import csv
 import os
 import json
+from uuid import uuid4
+from pydantic import BaseModel, Field
+from sqlalchemy import func
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-from feature_contract import MODEL_VERSION, THRESHOLD_BLOCK
+from feature_contract import MODEL_VERSION, THRESHOLD_BLOCK, get_risk_tier
 
 from .models import (
     TransactionRequest, PredictionResponse, TokenRequest, TokenResponse,
@@ -37,9 +39,13 @@ from .database import (
     load_recent_history,
     get_flagged_users,
     get_transaction_by_id,
+    SessionLocal,
+    TransactionRecord,
+    FraudHistory,
 )
 from .rules_engine import evaluate_rules, get_rule_decision
 from .explainability import explain_prediction, format_reasons
+from .shap_service import load_shap_explainer
 from .audit import log_prediction, get_audit_logs, get_prediction_audit_record
 from .auth import get_current_client, check_permission, create_access_token
 from .monitoring import (
@@ -57,12 +63,18 @@ from .pipeline import PipelineContext, step_validate
 from .feedback import save_feedback, get_feedback_stats
 from .live_feed import live_feed_handler
 from .biometric import verify_biometric
-from .graph_api import router as graph_router
-from .cases import router as cases_router, init_cases_table
-from .nlg_summary import router as nlg_router
+from .consumer_messages import (
+    build_security_note,
+    build_user_message,
+    build_user_reason,
+    derive_receiver_name,
+    detect_primary_pattern,
+    format_inr,
+)
+from .cases import init_cases_table, CaseRecord, router as cases_router
 from .rbi_report import router as rbi_router, rbi_report as generate_rbi_report
-from .upi_pattern import get_sender_receiver_vpa_risk
 from .user_api import router as user_router
+from .metrics_api import router as metrics_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("upi_fraud")
@@ -72,23 +84,12 @@ limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title="UPI Fraud Detection API",
-    version="3.0.0",
+    version="2.0.0",
     description=(
-        "Real-time UPI fraud detection with 4-model ensemble ML "
-        "(XGBoost + LightGBM + CatBoost + IsolationForest), online learning (River), "
-        "SHAP explainability, graph investigation, case management, NLG summaries, "
-        "RBI compliance reporting, and UPI pattern analysis."
+        "Real-time UPI fraud detection with ensemble ML (XGBoost + LightGBM + IsoForest), "
+        "SHAP explainability, graph analysis, rules engine, and compliance audit logging."
     ),
 )
-
-# Register v3.0 routers
-app.include_router(graph_router)
-app.include_router(cases_router)
-app.include_router(nlg_router)
-app.include_router(rbi_router)
-app.include_router(user_router)
-app.include_router(graph_router, prefix="/api/v1")
-app.include_router(cases_router, prefix="/api/v1")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -102,13 +103,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(metrics_router)
+
 
 # =============================================
 # Startup
 # =============================================
 
+@app.on_event("startup")
 def startup():
-    logger.info("=== Starting UPI Fraud Detection API v3.0.0 ===")
+    logger.info("=== Starting UPI Fraud Detection API ===")
     init_db()
     init_cases_table()
     load_all_models()
@@ -118,20 +122,241 @@ def startup():
     for r in records:
         graph.add_transaction(r["sender_upi"], r["receiver_upi"], r["amount"], r["timestamp"])
     load_reference_distribution()
+    load_shap_explainer()
     logger.info(f"Store: {get_store_stats()}")
     logger.info("=== Ready ===")
-@asynccontextmanager
-async def app_lifespan(app_instance: FastAPI):
-    startup()
-    yield
-
-
-app.router.lifespan_context = app_lifespan
 
 
 # =============================================
 # Helpers
 # =============================================
+
+HIGH_RISK_RECEIVER_KEYWORDS = (
+    "kyc",
+    "helpdesk",
+    "verify",
+    "refund",
+    "npci",
+    "govt",
+    "rbi",
+    "tax",
+    "support",
+    "mule",
+    "offshore",
+)
+
+
+class PayRequest(BaseModel):
+    sender_upi: str = Field(..., min_length=3)
+    receiver_upi: str = Field(..., min_length=3)
+    amount: float = Field(..., gt=0, le=500000)
+    transaction_type: str = Field("transfer")
+    note: Optional[str] = Field(None, max_length=100)
+    sender_device_id: Optional[str] = Field(None, min_length=1)
+    sender_location_lat: Optional[float] = Field(None, ge=-90, le=90)
+    sender_location_lon: Optional[float] = Field(None, ge=-180, le=180)
+
+
+class ReportFraudRequest(BaseModel):
+    transaction_id: str = Field(..., min_length=4)
+    reporter_upi: str = Field(..., min_length=3)
+    description: str = Field(..., min_length=5, max_length=500)
+
+
+class PreCheckConfirmRequest(BaseModel):
+    user_override: bool = True
+
+
+class PreCheckCancelRequest(BaseModel):
+    reason: Optional[str] = Field(default="User cancelled from warning prompt")
+
+
+_PRE_CHECK_STORE: dict[str, dict] = {}
+_PRE_CHECK_TTL = timedelta(minutes=30)
+
+
+def _cleanup_prechecks(now: Optional[datetime] = None) -> None:
+    current = now or datetime.utcnow()
+    expired = []
+    for pre_id, item in _PRE_CHECK_STORE.items():
+        created = item.get("created_at")
+        if not isinstance(created, datetime):
+            expired.append(pre_id)
+            continue
+        if (current - created) > _PRE_CHECK_TTL:
+            expired.append(pre_id)
+    for pre_id in expired:
+        _PRE_CHECK_STORE.pop(pre_id, None)
+
+
+def _normalize_upi(upi_id: str) -> str:
+    return (upi_id or "").strip().lower()
+
+
+def _receipt_id(txn_id: str) -> str:
+    compact = (txn_id or "UNKNOWN").replace("TXN_", "").upper()
+    return f"SP-{compact}"
+
+
+def _internal_status_from_decision(decision: str) -> str:
+    d = (decision or "").upper()
+    if d == "VERIFY":
+        return "PENDING_VERIFICATION"
+    if d == "BLOCK":
+        return "BLOCKED"
+    return "ALLOWED"
+
+
+def _public_status_from_record(decision: str, status: Optional[str]) -> str:
+    s = (status or "").upper()
+    if s == "VERIFIED":
+        return "VERIFIED"
+    if s == "PENDING_VERIFICATION":
+        return "PENDING_VERIFICATION"
+    if s == "BLOCKED":
+        return "BLOCKED"
+
+    d = (decision or "").upper()
+    if d == "VERIFY":
+        return "PENDING_VERIFICATION"
+    if d == "BLOCK":
+        return "BLOCKED"
+    return "COMPLETED"
+
+
+def _load_response_json(record: TransactionRecord) -> dict:
+    if not record.response_json:
+        return {}
+    try:
+        payload = json.loads(record.response_json)
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        pass
+    return {}
+
+
+def _receiver_info_snapshot(upi_id: str) -> dict:
+    receiver_upi = _normalize_upi(upi_id)
+    local = receiver_upi.split("@")[0] if receiver_upi else ""
+    graph_info = get_graph().get_node_features(receiver_upi)
+
+    db = SessionLocal()
+    try:
+        txn_count = int(
+            db.query(func.count(TransactionRecord.id))
+            .filter(TransactionRecord.receiver_upi == receiver_upi)
+            .scalar()
+            or 0
+        )
+        blocked_count = int(
+            db.query(func.count(TransactionRecord.id))
+            .filter(TransactionRecord.receiver_upi == receiver_upi)
+            .filter(TransactionRecord.status == "BLOCKED")
+            .scalar()
+            or 0
+        )
+    finally:
+        db.close()
+
+    keyword_risk = any(k in local for k in HIGH_RISK_RECEIVER_KEYWORDS)
+    if keyword_risk or blocked_count >= 2 or graph_info.get("is_mule_suspect") or graph_info.get("in_degree", 0) >= 8:
+        vpa_risk = "HIGH"
+    elif txn_count == 0 or blocked_count >= 1 or graph_info.get("in_degree", 0) >= 4:
+        vpa_risk = "MEDIUM"
+    else:
+        vpa_risk = "LOW"
+
+    warning = None
+    if vpa_risk == "HIGH":
+        warning = "This receiver matches scam patterns seen in UPI complaints. Verify before sending money."
+
+    return {
+        "upi_id": receiver_upi,
+        "display_name": derive_receiver_name(receiver_upi),
+        "is_known": txn_count > 0,
+        "vpa_risk": vpa_risk,
+        "warning": warning,
+        "transaction_count": txn_count,
+    }
+
+
+def _user_transaction_view(record: TransactionRecord) -> dict:
+    payload = _load_response_json(record)
+
+    decision = (payload.get("decision") or record.decision or "ALLOW").upper()
+    receiver_upi = _normalize_upi(payload.get("receiver_upi") or record.receiver_upi)
+    receiver_name = payload.get("receiver_name") or derive_receiver_name(receiver_upi)
+    amount = float(payload.get("amount") or record.amount or 0)
+    reasons = payload.get("reasons") if isinstance(payload.get("reasons"), list) else []
+    matched_pattern = None
+    if payload.get("fraud_pattern"):
+        matched_pattern = {
+            "name": payload.get("fraud_pattern"),
+            "description": payload.get("user_reason"),
+        }
+
+    user_reason = payload.get("user_reason") or build_user_reason(
+        decision=decision,
+        receiver_upi=receiver_upi,
+        reasons=[str(r) for r in reasons],
+        matched_pattern=matched_pattern,
+    )
+    user_message = payload.get("user_message") or build_user_message(
+        decision=decision,
+        amount=amount,
+        receiver_name=receiver_name,
+        user_reason=user_reason,
+    )
+    security_note = payload.get("security_note") or build_security_note(decision=decision, user_reason=user_reason)
+
+    return {
+        "transaction_id": record.transaction_id,
+        "sender_upi": _normalize_upi(record.sender_upi),
+        "receiver_upi": receiver_upi,
+        "receiver_name": receiver_name,
+        "amount": amount,
+        "amount_display": format_inr(amount),
+        "transaction_type": payload.get("transaction_type", "transfer"),
+        "status": payload.get("status") or _public_status_from_record(decision, record.status),
+        "decision": decision,
+        "user_message": user_message,
+        "user_reason": user_reason,
+        "security_note": security_note,
+        "fraud_pattern": payload.get("fraud_pattern"),
+        "timestamp": payload.get("timestamp") or record.timestamp,
+        "receipt_id": payload.get("receipt_id") or _receipt_id(record.transaction_id),
+    }
+
+
+def _security_level(score: int) -> str:
+    if score >= 85:
+        return "EXCELLENT"
+    if score >= 70:
+        return "GOOD"
+    if score >= 50:
+        return "FAIR"
+    return "AT_RISK"
+
+
+def _mark_compromised_profile(db, upi_id: str):
+    profile = db.query(FraudHistory).filter(FraudHistory.upi_id == upi_id).first()
+    now = datetime.utcnow()
+    if not profile:
+        profile = FraudHistory(
+            upi_id=upi_id,
+            fraud_count=1,
+            block_count=1,
+            is_flagged=True,
+            last_fraud_at=now,
+        )
+        db.add(profile)
+        return
+
+    profile.fraud_count = int(profile.fraud_count or 0) + 1
+    profile.block_count = int(profile.block_count or 0) + 1
+    profile.is_flagged = True
+    profile.last_fraud_at = now
 
 def _compute_risk_breakdown(ctx) -> RiskBreakdown:
     """Multi-dimensional risk scoring."""
@@ -186,25 +411,6 @@ def _run_prediction(txn_dict: dict):
     )
 
 
-def _get_npci_category(ctx) -> str:
-    """Map decision to NPCI fraud taxonomy."""
-    from feature_contract import NPCI_TAXONOMY
-    if ctx.decision == "ALLOW":
-        return NPCI_TAXONOMY.get("ALLOW", "Legitimate")
-    if ctx.decision == "BLOCK":
-        if any(a.get("type") == "IMPOSSIBLE_TRAVEL" for a in ctx.device_anomalies):
-            return NPCI_TAXONOMY.get("BLOCK_DEVICE", "Device Compromise")
-        if ctx.graph_info and ctx.graph_info.get("is_mule_suspect"):
-            return NPCI_TAXONOMY.get("BLOCK_MULE", "Money Mule Network")
-        if ctx.rule_decision == "BLOCK":
-            return NPCI_TAXONOMY.get("BLOCK_RULES", "Rule-Based Block")
-        return NPCI_TAXONOMY.get("BLOCK_ML", "ML-Detected Anomaly")
-    # VERIFY
-    if ctx.fraud_score >= 0.7:
-        return NPCI_TAXONOMY.get("VERIFY_HIGH", "UPI Credential Theft Suspect")
-    return NPCI_TAXONOMY.get("VERIFY_MEDIUM", "Social Engineering Suspect")
-
-
 def _ctx_to_response(ctx) -> dict:
     risk = _compute_risk_breakdown(ctx)
     is_biometric = ctx.decision == "VERIFY"
@@ -214,50 +420,25 @@ def _ctx_to_response(ctx) -> dict:
         status = "BLOCKED"
     else:
         status = "ALLOWED"
-
-    # Use pipeline-computed VPA risk if available, else compute
-    vpa_risk = getattr(ctx, 'vpa_risk', None) or None
-    if not vpa_risk:
-        try:
-            sender = ctx.raw_txn.get("sender_upi", "")
-            receiver = ctx.raw_txn.get("receiver_upi", "")
-            if sender and receiver:
-                vpa_risk = get_sender_receiver_vpa_risk(sender, receiver)
-        except Exception:
-            pass
-
-    # Geo risk from pipeline
-    geo_risk = getattr(ctx, 'geo_risk', None) or None
-
-    # Rules reasons for frontend display
-    rules_reasons = []
-    for r in ctx.rules_triggered:
-        if hasattr(r, 'reason') and r.reason:
-            rules_reasons.append(r.reason)
-
     return {
         "transaction_id": ctx.txn_id,
         "fraud_score": ctx.fraud_score,
         "risk_score": ctx.risk_score,
         "decision": ctx.decision,
         "risk_level": ctx.risk_level,
+        "risk_tier": get_risk_tier(float(ctx.risk_score or 0.0)),
         "message": ctx.message,
         "requires_biometric": is_biometric,
         "biometric_methods": ["fingerprint", "face", "iris"] if is_biometric else [],
         "status": status,
         "reasons": ctx.reasons,
         "timestamp": ctx.timestamp,
-        "sender_upi": ctx.raw_txn.get("sender_upi", ""),
-        "receiver_upi": ctx.raw_txn.get("receiver_upi", ""),
-        "amount": ctx.raw_txn.get("amount", 0),
-        "transaction_type": ctx.raw_txn.get("transaction_type", "purchase"),
         "individual_scores": ctx.individual_scores,
         "models_used": ctx.models_used,
         "rules_triggered": [
             {"rule_name": r.rule_name, "reason": r.reason, "action": r.action}
             for r in ctx.rules_triggered
         ],
-        "rules_reasons": rules_reasons,
         "device_anomalies": [
             {"type": a["type"], "severity": a["severity"], "detail": a["detail"]}
             for a in ctx.device_anomalies
@@ -265,11 +446,21 @@ def _ctx_to_response(ctx) -> dict:
         "graph_info": {k: v for k, v in ctx.graph_info.items()
                         if k in GraphInfo.model_fields} if ctx.graph_info else None,
         "risk_breakdown": risk.model_dump(),
-        "npci_category": _get_npci_category(ctx),
-        "geo_risk": geo_risk,
-        "vpa_risk": vpa_risk,
+        "user_warning": ctx.user_warning,
+        "personalized_threshold": float(getattr(ctx, "personalized_threshold", THRESHOLD_BLOCK) or THRESHOLD_BLOCK),
         "model_version": ctx.model_version,
     }
+
+
+def _ctx_to_precheck_response(ctx, pre_check_id: str, latency_ms: float) -> dict:
+    response = _ctx_to_response(ctx)
+    response.update(
+        {
+            "pre_check_id": pre_check_id,
+            "latency_ms": round(float(latency_ms), 2),
+        }
+    )
+    return response
 
 
 def _bg_audit(txn_id, sender, receiver, amount, fraud_score, decision, risk_level,
@@ -292,7 +483,7 @@ def _bg_audit(txn_id, sender, receiver, amount, fraud_score, decision, risk_leve
 @app.post("/api/v1/predict", response_model=PredictionResponse, include_in_schema=False)
 @app.post("/predict", response_model=PredictionResponse,
           summary="Predict fraud for a single transaction",
-          description="Runs the full 8-step pipeline: validate ΓåÆ features ΓåÆ rules ΓåÆ ML ΓåÆ decide ΓåÆ explain ΓåÆ device ΓåÆ graph")
+          description="Runs the full 8-step pipeline: validate → features → rules → ML → decide → explain → device → graph")
 @limiter.limit("100/minute")
 async def predict(
     request: Request,
@@ -426,6 +617,481 @@ async def predict(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post(
+    "/api/v1/pre-check",
+    summary="Pre-payment fraud check",
+    description="Run risk scoring before UPI PIN entry. Returns user warning payload and pre_check_id.",
+)
+@limiter.limit("120/minute")
+async def pre_check(
+    request: Request,
+    txn: TransactionRequest,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "predict")
+    started = time.perf_counter()
+    _cleanup_prechecks()
+
+    try:
+        ctx = _run_prediction(txn.model_dump())
+        if ctx.errors:
+            logger.warning("Pipeline warnings for /api/v1/pre-check txn=%s: %s", ctx.txn_id, ctx.errors)
+
+        record_prediction(ctx.fraud_score, ctx.features)
+
+        pre_check_id = str(uuid4())
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        response = _ctx_to_precheck_response(ctx, pre_check_id=pre_check_id, latency_ms=elapsed_ms)
+
+        _PRE_CHECK_STORE[pre_check_id] = {
+            "created_at": datetime.utcnow(),
+            "txn": txn.model_dump(),
+            "ctx_response": response,
+            "status": "OPEN",
+        }
+
+        record_latency(elapsed_ms, cache_hit=False)
+        return response
+    except Exception as exc:
+        logger.exception("pre-check failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Unable to run pre-check right now")
+
+
+@app.post(
+    "/api/v1/pre-check/{pre_check_id}/confirm",
+    summary="Confirm warned payment",
+    description="User confirms proceed-anyway on warned transaction.",
+)
+@limiter.limit("120/minute")
+async def pre_check_confirm(
+    request: Request,
+    pre_check_id: str,
+    body: PreCheckConfirmRequest,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "predict")
+    _cleanup_prechecks()
+
+    item = _PRE_CHECK_STORE.get(pre_check_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="pre_check_id not found or expired")
+
+    if item.get("status") == "CANCELLED":
+        raise HTTPException(status_code=409, detail="This pre-check was cancelled by user")
+
+    txn_payload = dict(item.get("txn") or {})
+    ctx = _run_prediction(txn_payload)
+    response = _ctx_to_response(ctx)
+    response["pre_check_id"] = pre_check_id
+    response["user_override"] = bool(body.user_override)
+
+    final_decision = "ALLOW" if bool(body.user_override) else str(ctx.decision or "ALLOW").upper()
+    final_status = "ALLOWED" if final_decision == "ALLOW" else _internal_status_from_decision(final_decision)
+
+    response["decision"] = final_decision
+    response["status"] = final_status
+
+    save_transaction(
+        ctx.txn_id,
+        txn_payload.get("sender_upi"),
+        txn_payload.get("receiver_upi"),
+        float(txn_payload.get("amount", 0.0) or 0.0),
+        float(ctx.fraud_score or 0.0),
+        final_decision,
+        ctx.timestamp,
+        txn_payload.get("sender_device_id") or "",
+        status=final_status,
+        response_json=json.dumps(response, ensure_ascii=False, separators=(",", ":")),
+    )
+
+    _bg_audit(
+        ctx.txn_id,
+        str(txn_payload.get("sender_upi") or ""),
+        str(txn_payload.get("receiver_upi") or ""),
+        float(txn_payload.get("amount", 0.0) or 0.0),
+        float(ctx.fraud_score or 0.0),
+        final_decision,
+        str(ctx.risk_level or "MEDIUM"),
+        list(ctx.reasons or []),
+        [r.rule_name for r in (ctx.rules_triggered or [])],
+        ctx.features,
+        ctx.timestamp,
+    )
+
+    item["status"] = "CONFIRMED"
+    item["confirmed_at"] = datetime.utcnow()
+    item["transaction_id"] = ctx.txn_id
+    return response
+
+
+@app.post(
+    "/api/v1/pre-check/{pre_check_id}/cancel",
+    summary="Cancel warned payment",
+    description="User cancels transaction from warning popup.",
+)
+@limiter.limit("120/minute")
+async def pre_check_cancel(
+    request: Request,
+    pre_check_id: str,
+    body: PreCheckCancelRequest,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "predict")
+    _cleanup_prechecks()
+
+    item = _PRE_CHECK_STORE.get(pre_check_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="pre_check_id not found or expired")
+
+    txn_payload = dict(item.get("txn") or {})
+    cached = dict(item.get("ctx_response") or {})
+    txn_id = str(cached.get("transaction_id") or f"PRECHK_{uuid4().hex[:12]}")
+    score = float(cached.get("fraud_score") or 0.0)
+
+    response = {
+        "status": "CANCELLED",
+        "pre_check_id": pre_check_id,
+        "transaction_id": txn_id,
+        "message": str(body.reason or "User cancelled payment after warning"),
+        "risk_score": score,
+    }
+
+    save_transaction(
+        txn_id,
+        txn_payload.get("sender_upi"),
+        txn_payload.get("receiver_upi"),
+        float(txn_payload.get("amount", 0.0) or 0.0),
+        score,
+        "BLOCK",
+        datetime.utcnow().isoformat(),
+        txn_payload.get("sender_device_id") or "",
+        status="CANCELLED",
+        response_json=json.dumps(response, ensure_ascii=False, separators=(",", ":")),
+    )
+
+    item["status"] = "CANCELLED"
+    item["cancelled_at"] = datetime.utcnow()
+    return response
+
+
+@app.post(
+    "/pay",
+    summary="User-facing UPI payment with ShieldPay protection",
+    description="Runs the fraud pipeline and returns user-friendly language without exposing internal model fields.",
+)
+@limiter.limit("80/minute")
+async def pay_transaction(
+    request: Request,
+    body: PayRequest,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "predict")
+    start_perf = time.perf_counter()
+
+    sender_upi = _normalize_upi(body.sender_upi)
+    receiver_upi = _normalize_upi(body.receiver_upi)
+    if not sender_upi or not receiver_upi:
+        raise HTTPException(status_code=422, detail="sender_upi and receiver_upi are required")
+
+    txn_dict = {
+        "sender_upi": sender_upi,
+        "receiver_upi": receiver_upi,
+        "amount": body.amount,
+        "transaction_type": body.transaction_type or "transfer",
+        "note": body.note or "",
+        "sender_device_id": body.sender_device_id,
+        "sender_location_lat": body.sender_location_lat,
+        "sender_location_lon": body.sender_location_lon,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    try:
+        ctx = _run_prediction(txn_dict)
+        if ctx.errors:
+            logger.warning("Pipeline warnings for /pay txn=%s: %s", ctx.txn_id, ctx.errors)
+
+        record_prediction(ctx.fraud_score, ctx.features)
+
+        decision = (ctx.decision or "ALLOW").upper()
+        receiver_name = derive_receiver_name(receiver_upi)
+        matched_pattern = detect_primary_pattern(ctx.raw_txn, ctx.features, ctx.graph_info)
+        user_reason = build_user_reason(
+            decision=decision,
+            receiver_upi=receiver_upi,
+            reasons=[str(r) for r in (ctx.reasons or [])],
+            matched_pattern=matched_pattern,
+        )
+        user_message = build_user_message(
+            decision=decision,
+            amount=body.amount,
+            receiver_name=receiver_name,
+            user_reason=user_reason,
+        )
+        security_note = build_security_note(decision=decision, user_reason=user_reason)
+
+        status = "COMPLETED"
+        if decision == "VERIFY":
+            status = "PENDING_VERIFICATION"
+        elif decision == "BLOCK":
+            status = "BLOCKED"
+
+        response = {
+            "transaction_id": ctx.txn_id,
+            "status": status,
+            "decision": decision,
+            "amount": float(body.amount),
+            "receiver_upi": receiver_upi,
+            "receiver_name": receiver_name,
+            "user_message": user_message,
+            "user_reason": user_reason,
+            "security_note": security_note,
+            "timestamp": ctx.timestamp,
+            "receipt_id": _receipt_id(ctx.txn_id),
+            "transaction_type": body.transaction_type or "transfer",
+        }
+        if decision == "VERIFY":
+            response["verify_methods"] = ["fingerprint", "face", "pin"]
+        if decision == "BLOCK" and matched_pattern:
+            response["fraud_pattern"] = matched_pattern.get("name")
+
+        save_transaction(
+            ctx.txn_id,
+            sender_upi,
+            receiver_upi,
+            body.amount,
+            ctx.fraud_score,
+            decision,
+            ctx.timestamp,
+            ctx.raw_txn.get("sender_device_id") or "",
+            status=_internal_status_from_decision(decision),
+            response_json=json.dumps(response, ensure_ascii=False, separators=(",", ":")),
+        )
+        _bg_audit(
+            ctx.txn_id,
+            sender_upi,
+            receiver_upi,
+            body.amount,
+            ctx.fraud_score,
+            decision,
+            ctx.risk_level,
+            [user_reason],
+            [r.rule_name for r in ctx.rules_triggered],
+            ctx.features,
+            ctx.timestamp,
+        )
+
+        elapsed_ms = (time.perf_counter() - start_perf) * 1000.0
+        record_latency(elapsed_ms, cache_hit=False)
+        logger.info(
+            "pay txn=%s decision=%s status=%s latency_ms=%.2f",
+            ctx.txn_id,
+            decision,
+            status,
+            elapsed_ms,
+        )
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("/pay failed: %s", e)
+        raise HTTPException(status_code=500, detail="Unable to process payment right now")
+
+
+@app.get(
+    "/receiver/info",
+    summary="Receiver lookup for payment entry",
+    description="Returns receiver display information and risk level while user types a UPI ID.",
+)
+@limiter.limit("240/minute")
+async def receiver_info(
+    request: Request,
+    upi_id: str,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "transactions")
+    normalized_upi = _normalize_upi(upi_id)
+    if not normalized_upi:
+        raise HTTPException(status_code=422, detail="upi_id is required")
+    return _receiver_info_snapshot(normalized_upi)
+
+
+@app.get(
+    "/my/transactions",
+    summary="Fetch current user's transaction history",
+    description="Returns sender-filtered, user-friendly transaction rows.",
+)
+@limiter.limit("60/minute")
+async def my_transactions(
+    request: Request,
+    sender_upi: str,
+    limit: int = 50,
+    status: Optional[str] = None,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "transactions")
+    sender = _normalize_upi(sender_upi)
+    if not sender:
+        raise HTTPException(status_code=422, detail="sender_upi is required")
+
+    limit = max(1, min(limit, 200))
+    status_filter = (status or "").strip().upper()
+
+    db = SessionLocal()
+    try:
+        query = db.query(TransactionRecord).filter(TransactionRecord.sender_upi == sender)
+
+        if status_filter and status_filter != "ALL":
+            if status_filter in {"COMPLETED", "SENT", "ALLOWED"}:
+                query = query.filter(TransactionRecord.status.in_(["ALLOWED", "VERIFIED"]))
+            elif status_filter in {"PENDING", "PENDING_VERIFICATION"}:
+                query = query.filter(TransactionRecord.status == "PENDING_VERIFICATION")
+            elif status_filter == "BLOCKED":
+                query = query.filter(TransactionRecord.status == "BLOCKED")
+            elif status_filter == "VERIFIED":
+                query = query.filter(TransactionRecord.status == "VERIFIED")
+            else:
+                raise HTTPException(status_code=422, detail="Unsupported status filter")
+
+        records = query.order_by(TransactionRecord.id.desc()).limit(limit).all()
+        txns = [_user_transaction_view(r) for r in records]
+        return {
+            "sender_upi": sender,
+            "transactions": txns,
+            "total": len(txns),
+        }
+    finally:
+        db.close()
+
+
+@app.get(
+    "/my/security-score",
+    summary="Get personal ShieldPay security score",
+    description="Returns a personal score, level, protected amount, and recent alerts for one UPI profile.",
+)
+@limiter.limit("60/minute")
+async def my_security_score(
+    request: Request,
+    upi_id: str,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "transactions")
+    sender = _normalize_upi(upi_id)
+    if not sender:
+        raise HTTPException(status_code=422, detail="upi_id is required")
+
+    db = SessionLocal()
+    try:
+        profile = db.query(FraudHistory).filter(FraudHistory.upi_id == sender).first()
+        fraud_events = int(profile.fraud_count or 0) if profile else 0
+        blocked_events = int(profile.block_count or 0) if profile else 0
+
+        score = int(max(0, min(100, round(100 - (fraud_events * 15) - (blocked_events * 8)))))
+        level = _security_level(score)
+
+        protected_amount = float(
+            db.query(func.coalesce(func.sum(TransactionRecord.amount), 0.0))
+            .filter(TransactionRecord.sender_upi == sender)
+            .filter(TransactionRecord.status == "BLOCKED")
+            .scalar()
+            or 0.0
+        )
+
+        recent_records = (
+            db.query(TransactionRecord)
+            .filter(TransactionRecord.sender_upi == sender)
+            .filter(TransactionRecord.status.in_(["PENDING_VERIFICATION", "VERIFIED", "BLOCKED"]))
+            .order_by(TransactionRecord.id.desc())
+            .limit(5)
+            .all()
+        )
+
+        recent_alerts = []
+        for record in recent_records:
+            tx = _user_transaction_view(record)
+            recent_alerts.append(
+                {
+                    "transaction_id": tx["transaction_id"],
+                    "status": tx["status"],
+                    "decision": tx["decision"],
+                    "receiver_upi": tx["receiver_upi"],
+                    "receiver_name": tx["receiver_name"],
+                    "amount": tx["amount"],
+                    "amount_display": tx["amount_display"],
+                    "message": tx["user_message"],
+                    "timestamp": tx["timestamp"],
+                }
+            )
+
+        return {
+            "score": score,
+            "level": level,
+            "fraud_events": fraud_events,
+            "protected_amount": round(protected_amount, 2),
+            "recent_alerts": recent_alerts,
+        }
+    finally:
+        db.close()
+
+
+@app.post(
+    "/my/report-fraud",
+    summary="Report unauthorized transaction",
+    description="Creates a support case and marks the sender profile as compromised.",
+)
+@limiter.limit("30/minute")
+async def report_fraud(
+    request: Request,
+    body: ReportFraudRequest,
+    client: dict = Depends(get_current_client),
+):
+    check_permission(client, "transactions")
+
+    transaction_id = (body.transaction_id or "").strip()
+    reporter_upi = _normalize_upi(body.reporter_upi)
+    if not transaction_id or not reporter_upi:
+        raise HTTPException(status_code=422, detail="transaction_id and reporter_upi are required")
+
+    db = SessionLocal()
+    try:
+        txn = db.query(TransactionRecord).filter(TransactionRecord.transaction_id == transaction_id).first()
+        if txn and _normalize_upi(txn.sender_upi) != reporter_upi:
+            raise HTTPException(status_code=403, detail="You can only report transactions from your own UPI ID")
+
+        if txn:
+            txn.status = "BLOCKED"
+            txn.decision = "BLOCK"
+
+        _mark_compromised_profile(db, reporter_upi)
+
+        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        case = CaseRecord(
+            txn_id=transaction_id,
+            status="OPEN",
+            assigned_to="support-queue",
+            notes=f"[{ts}] User report from {reporter_upi}: {body.description.strip()}",
+        )
+        db.add(case)
+
+        db.commit()
+        db.refresh(case)
+        return {
+            "status": "REPORTED",
+            "transaction_id": transaction_id,
+            "ticket_id": f"CASE-{case.id}",
+            "case_id": case.id,
+            "message": "Thanks for reporting this payment. We have secured your account and opened a support case.",
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("/my/report-fraud failed: %s", e)
+        raise HTTPException(status_code=500, detail="Unable to submit report right now")
+    finally:
+        db.close()
+
+
 @app.post("/predict/batch", response_model=BatchPredictSummary,
           summary="Batch predict from CSV upload",
           description="Upload a CSV file with columns: sender_upi, receiver_upi, amount, transaction_type, sender_device_id")
@@ -493,25 +1159,12 @@ async def batch_predict(
 # Feedback
 # =============================================
 
-@app.post("/api/v1/feedback", include_in_schema=False)
 @app.post("/feedback", summary="Submit analyst feedback",
-          description="Label a transaction as confirmed_fraud, false_positive, or true_negative. Feeds into retraining pipeline and online learning model.")
+          description="Label a transaction as confirmed_fraud, false_positive, or true_negative. Feeds into retraining pipeline.")
 @limiter.limit("60/minute")
 async def submit_feedback(request: Request, fb: FeedbackRequest, client: dict = Depends(get_current_client)):
     check_permission(client, "predict")
     save_feedback(fb.transaction_id, fb.analyst_verdict, fb.analyst_notes or "")
-
-    # Feed into online model for continuous learning
-    try:
-        from ml.online_model import learn_one, get_online_model_stats
-        txn = get_transaction_by_id(fb.transaction_id)
-        if txn:
-            features = {"amount": txn.get("amount", 0), "fraud_score": txn.get("fraud_score", 0)}
-            is_fraud = fb.analyst_verdict == "confirmed_fraud"
-            learn_one(features, is_fraud=is_fraud)
-    except Exception as e:
-        logger.warning(f"Online model update skipped: {e}")
-
     return {"status": "ok", "transaction_id": fb.transaction_id, "verdict": fb.analyst_verdict}
 
 @app.get("/feedback/stats", summary="Feedback statistics",
@@ -540,12 +1193,9 @@ async def verify_biometric_endpoint(
     method = body.get("method", "fingerprint")
     if not txn_id:
         raise HTTPException(status_code=422, detail="transaction_id is required")
-    if method not in ("fingerprint", "face", "iris", "pin"):
-        raise HTTPException(status_code=422, detail="method must be one of: fingerprint, face, iris, pin")
-    resolved_method = "fingerprint" if method == "pin" else method
-    result = verify_biometric(txn_id, method=resolved_method)
-    if method == "pin":
-        result["method"] = "pin"
+    if method not in ("fingerprint", "face", "iris"):
+        raise HTTPException(status_code=422, detail="method must be one of: fingerprint, face, iris")
+    result = verify_biometric(txn_id, method=method)
     if result["verification_status"] == "ERROR":
         raise HTTPException(status_code=404, detail=result["message"])
     return result
@@ -598,7 +1248,6 @@ async def get_token(req: TokenRequest):
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-@app.get("/api/v1/monitoring/drift", include_in_schema=False)
 @app.get("/monitoring/drift", summary="Feature drift report (PSI)")
 @limiter.limit("10/minute")
 async def drift_report(request: Request, client: dict = Depends(get_current_client)):
@@ -639,23 +1288,23 @@ async def rbi_report_alias(days: int = 30, client: dict = Depends(get_current_cl
     return generate_rbi_report(days)
 
 
+# Legacy/API-v1 compatibility routers.
+# Added after primary routes so duplicate root paths continue using primary handlers.
+app.include_router(user_router)
+app.include_router(cases_router, prefix="/api/v1")
+app.include_router(rbi_router, prefix="/api/v1")
+
+
 # =============================================
 # Health Checks
 # =============================================
 
 @app.get("/health", summary="Quick health check")
 async def health():
-    online_stats = {}
-    try:
-        from ml.online_model import get_online_model_stats
-        online_stats = get_online_model_stats()
-    except Exception:
-        pass
     return {
-        "status": "ok", "version": "3.0.0",
+        "status": "ok", "version": "2.0.0",
         "model_version": MODEL_VERSION,
         "store": get_store_stats(),
-        "online_model": online_stats,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -663,7 +1312,7 @@ async def health():
 async def liveness():
     return {"status": "alive"}
 
-@app.get("/health/ready", summary="Readiness probe ΓÇö checks all subsystems")
+@app.get("/health/ready", summary="Readiness probe — checks all subsystems")
 async def readiness():
     checks = {}
     all_ok = True

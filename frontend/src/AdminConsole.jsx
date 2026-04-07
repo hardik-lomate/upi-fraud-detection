@@ -8,6 +8,7 @@ import RiskMonitorPanel from './components/RiskMonitorPanel';
 import AlertStream from './components/AlertStream';
 import DemoAttackSimulator from './components/DemoAttackSimulator';
 import VerdictCard from './components/VerdictCard';
+import ModelMetricsPanel from './components/ModelMetricsPanel';
 import GraphView from './views/GraphView';
 import CasesView from './views/CasesView';
 
@@ -17,6 +18,7 @@ import {
   predictTransaction,
   submitFeedback,
   verifyBiometric,
+  fetchModelMetrics,
 } from './api/fraudApi';
 import { generateTransactionInput, simulatePredictFallback, simulateVerifyFallback } from './utils/simulate';
 
@@ -89,7 +91,11 @@ export default function AdminConsole() {
   const wsRef = useRef(null);
   const fallbackTimerRef = useRef(null);
   const historyTimerRef = useRef(null);
+  const metricsTimerRef = useRef(null);
   const fallbackTickRef = useRef(0);
+
+  const [modelMetrics, setModelMetrics] = useState(null);
+  const [metricsLoading, setMetricsLoading] = useState(false);
 
   const selectedTxn = useMemo(() => feed.find((t) => t.transaction_id === selectedId) || null, [feed, selectedId]);
   const selectedHistoryTxn = useMemo(
@@ -128,6 +134,18 @@ export default function AdminConsole() {
     }
   }, []);
 
+  const refreshModelMetrics = useCallback(async () => {
+    setMetricsLoading(true);
+    try {
+      const data = await fetchModelMetrics();
+      setModelMetrics(data || null);
+    } catch {
+      setModelMetrics(null);
+    } finally {
+      setMetricsLoading(false);
+    }
+  }, []);
+
   const runFallbackTick = useCallback(async () => {
     setLoadingFeed(true);
     const input = generateTransactionInput({ profile: streamProfile });
@@ -157,6 +175,14 @@ export default function AdminConsole() {
       if (historyTimerRef.current) clearInterval(historyTimerRef.current);
     };
   }, [refreshHistory]);
+
+  useEffect(() => {
+    refreshModelMetrics();
+    metricsTimerRef.current = setInterval(refreshModelMetrics, 30000);
+    return () => {
+      if (metricsTimerRef.current) clearInterval(metricsTimerRef.current);
+    };
+  }, [refreshModelMetrics]);
 
   useEffect(() => {
     if (streamPaused) {
@@ -375,6 +401,10 @@ export default function AdminConsole() {
                 </div>
               </div>
             </section>
+
+            <div className="mt-4">
+              <ModelMetricsPanel metrics={modelMetrics} loading={metricsLoading} />
+            </div>
 
             {/* Main Grid: Table + Details + Alerts */}
             <div className="mt-4 grid grid-cols-1 gap-6 xl:grid-cols-[1fr_380px]">

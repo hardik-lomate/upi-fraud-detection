@@ -1,7 +1,6 @@
 """Ensemble Prediction.
 
 Loads models + calibration and enforces *training-time* feature ordering.
-v3.0: Now supports XGBoost, LightGBM, CatBoost, and IsolationForest.
 """
 
 import joblib
@@ -39,7 +38,6 @@ def load_all_models():
     print("Loading models...")
     _load_if_exists("xgboost", "xgboost_model.pkl")
     _load_if_exists("lightgbm", "lightgbm_model.pkl")
-    _load_if_exists("catboost", "catboost_model.pkl")
     _load_if_exists("isolation_forest", "isolation_forest_model.pkl")
 
     # Ensemble weights
@@ -101,26 +99,16 @@ def predict_fraud(features_dict: dict) -> dict:
     if "xgboost" in _models:
         s = float(_models["xgboost"].predict_proba(X)[0][1])
         scores["xgboost"] = round(s, 4)
-        w = _ensemble_weights.get("xgboost", 0.30)
+        w = _ensemble_weights.get("xgboost", 0.45)
         weighted_sum += w * s
         total_weight += w
 
     if "lightgbm" in _models:
         s = float(_models["lightgbm"].predict_proba(X)[0][1])
         scores["lightgbm"] = round(s, 4)
-        w = _ensemble_weights.get("lightgbm", 0.30)
+        w = _ensemble_weights.get("lightgbm", 0.35)
         weighted_sum += w * s
         total_weight += w
-
-    if "catboost" in _models:
-        try:
-            s = float(_models["catboost"].predict_proba(X)[0][1])
-            scores["catboost"] = round(s, 4)
-            w = _ensemble_weights.get("catboost", 0.25)
-            weighted_sum += w * s
-            total_weight += w
-        except Exception:
-            pass  # CatBoost may fail if feature types don't match; graceful skip
 
     if "isolation_forest" in _models:
         raw = float(_models["isolation_forest"].decision_function(X)[0])
@@ -131,19 +119,9 @@ def predict_fraud(features_dict: dict) -> dict:
         else:
             s = 1.0 / (1.0 + np.exp(raw))  # sigmoid fallback
         scores["isolation_forest"] = round(float(s), 4)
-        w = _ensemble_weights.get("isolation_forest", 0.15)
+        w = _ensemble_weights.get("isolation_forest", 0.20)
         weighted_sum += w * s
         total_weight += w
-
-    # Online model score (recency signal)
-    try:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-        from ml.online_model import score_one
-        online_score = score_one(features_dict)
-        if online_score > 0:
-            scores["online_recency"] = round(online_score, 4)
-    except Exception:
-        pass  # Online model is optional
 
     ensemble_score = weighted_sum / total_weight if total_weight > 0 else 0.0
 

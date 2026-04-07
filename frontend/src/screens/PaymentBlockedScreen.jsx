@@ -8,6 +8,10 @@ export default function PaymentBlockedScreen({ result, onHome, onAppeal, onRepor
   const [phone, setPhone] = useState('');
   const [submitted, setSubmitted] = useState(false);
 
+  const topReasons = (result?.reasons || result?.user_warning?.reasons_display || []).slice(0, 3);
+  const receiverUpi = result?.receiver_upi || result?.raw?.receiver_upi || 'unknown@upi';
+  const receiverFlagCount = Number(result?.receiver_fraud_flag_count || result?.raw?.receiver_fraud_flag_count || 0);
+
   async function submitAppeal() {
     await onAppeal?.({ reason, phone, transactionId: result?.transaction_id });
     setSubmitted(true);
@@ -17,7 +21,7 @@ export default function PaymentBlockedScreen({ result, onHome, onAppeal, onRepor
 
   return (
     <div className="result-screen blocked-screen shake-on-mount">
-      <div className="blocked-icon" aria-hidden="true">🛡✕</div>
+      <div className="blocked-icon high-risk" aria-hidden="true">🛡✕</div>
       <h2>Payment Stopped</h2>
       <p className="safe-line">Your money is safe</p>
 
@@ -28,6 +32,34 @@ export default function PaymentBlockedScreen({ result, onHome, onAppeal, onRepor
       />
 
       <FraudPatternCard pattern={result?.fraud_pattern} description={result?.user_reason} />
+
+      {topReasons.length ? (
+        <section className="user-card">
+          <div className="field-label">Top Risk Reasons</div>
+          <div className="txn-list">
+            {topReasons.map((item, idx) => (
+              <article key={`${idx}-${item}`} className="txn-item" style={{ cursor: 'default' }}>
+                <div className="txn-left">
+                  <span className="txn-avatar" style={{ background: idx === 0 ? '#fee2e2' : '#fef3c7', color: idx === 0 ? '#b91c1c' : '#92400e' }}>
+                    {idx === 0 ? '!' : 'i'}
+                  </span>
+                  <div className="txn-identities">
+                    <strong>{item}</strong>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="user-card">
+        <div className="field-label">Receiver Details</div>
+        <div className="txn-meta">
+          <span><strong>UPI ID:</strong> {receiverUpi}</span>
+          <span><strong>Fraud Flag Count:</strong> {receiverFlagCount}</span>
+        </div>
+      </section>
 
       <section className="user-card guidance-card">
         <div className="field-label">What to do now</div>
@@ -43,7 +75,7 @@ export default function PaymentBlockedScreen({ result, onHome, onAppeal, onRepor
         <button type="button" className="ghost-btn" onClick={() => setShowAppeal((v) => !v)}>
           This was me — Appeal
         </button>
-        <button type="button" className="ghost-btn" onClick={onReport}>Report to Bank (1930)</button>
+        <button type="button" className="ghost-btn" onClick={onReport}>Report this UPI ID</button>
       </div>
 
       {showAppeal ? (

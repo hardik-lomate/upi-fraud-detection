@@ -88,6 +88,8 @@ export default function HomeScreen({
   const banner = useMemo(() => securityBannerVariant(transactions), [transactions]);
   const securityStatus = banner.tone === 'blocked' ? 'AT_RISK' : 'PROTECTED';
   const alertCount = Number(securitySummary?.recent_alerts?.length || 0);
+  const blockedToday = transactions.filter((txn) => txn.status === 'BLOCKED').length;
+  const safetyScore = Number(securitySummary?.score || 0);
 
   return (
     <div className="screen-stack">
@@ -132,7 +134,14 @@ export default function HomeScreen({
         </section>
       ) : null}
 
-      <BalanceCard balance={profile.balance} securityStatus={securityStatus} lastDecision={lastDecision} />
+      <BalanceCard
+        balance={profile.balance}
+        securityStatus={securityStatus}
+        lastDecision={lastDecision}
+        transactionsAnalyzedToday={transactions.length}
+        blockedToday={blockedToday}
+        userSafetyRating={safetyScore}
+      />
 
       <section className="quick-actions">
         <button type="button" onClick={() => onOpenPay({ transaction_type: 'transfer' })}>

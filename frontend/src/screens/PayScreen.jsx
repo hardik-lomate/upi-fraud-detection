@@ -1,7 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ReceiverInput from '../components/user/ReceiverInput';
 import Numpad from '../components/user/Numpad';
-import { fetchReceiverInfo } from '../api/fraudApi';
+import FraudWarningModal from '../components/user/FraudWarningModal';
+import {
+  fetchReceiverInfo,
+  preCheck,
+  confirmPayment,
+  cancelPayment,
+} from '../api/fraudApi';
 import { formatIndianCurrency } from '../utils/format';
 
 const TXN_TYPES = [
@@ -24,6 +30,10 @@ export default function PayScreen({ draft, onBack, onSubmit }) {
   const [note, setNote] = useState(draft?.note || '');
   const [receiverInfo, setReceiverInfo] = useState(null);
   const [lookupBusy, setLookupBusy] = useState(false);
+  const [preCheckResult, setPreCheckResult] = useState(null);
+  const [showFraudWarning, setShowFraudWarning] = useState(false);
+  const [isChecking, setIsChecking] = useState(false);
+  const [pendingPayload, setPendingPayload] = useState(null);
 
   useEffect(() => {
     if (!draft) return;
@@ -51,6 +61,82 @@ export default function PayScreen({ draft, onBack, onSubmit }) {
 
   const amount = useMemo(() => normalizeAmount(amountInput), [amountInput]);
   const canPay = receiverUpi.trim().length >= 3 && amount >= 1;
+
+  const buildPayload = useCallback(() => ({
+    receiver_upi: receiverUpi.trim().toLowerCase(),
+    amount,
+    transaction_type: transactionType,
+    note: note.trim(),
+    sender_device_id: draft?.sender_device_id || undefined,
+    receiver_name: receiverInfo?.display_name,
+  }), [amount, draft?.sender_device_id, note, receiverInfo?.display_name, receiverUpi, transactionType]);
+
+  const handlePayPress = useCallback(async () => {
+    if (!canPay || isChecking) return;
+
+    const payload = buildPayload();
+    setPendingPayload(payload);
+    setIsChecking(true);
+
+    try {
+      const senderUpi = (draft?.sender_upi || draft?.upi || 'demo.user@okicici').trim().toLowerCase();
+      const preCheckPayload = {
+        sender_upi: senderUpi,
+        receiver_upi: payload.receiver_upi,
+        amount: payload.amount,
+        transaction_type: payload.transaction_type,
+        sender_device_id: payload.sender_device_id || 'WEB_DEVICE',
+        timestamp: new Date().toISOString(),
+      };
+
+      const result = await preCheck(preCheckPayload);
+      setPreCheckResult(result);
+
+      if (result?.user_warning?.show_warning) {
+        setShowFraudWarning(true);
+      } else {
+        onSubmit?.({ ...payload, pre_check_id: result?.pre_check_id, pre_check_result: result });
+      }
+    } catch {
+      // Fallback: keep old flow if pre-check API is not reachable.
+      onSubmit?.(payload);
+    } finally {
+      setIsChecking(false);
+    }
+  }, [buildPayload, canPay, draft?.sender_upi, draft?.upi, isChecking, onSubmit]);
+
+  const handleProceed = useCallback(async () => {
+    if (!preCheckResult?.pre_check_id) {
+      onSubmit?.(pendingPayload || buildPayload());
+      return;
+    }
+
+    try {
+      const confirmResult = await confirmPayment(preCheckResult.pre_check_id, true);
+      onSubmit?.({
+        ...(pendingPayload || buildPayload()),
+        pre_check_id: preCheckResult.pre_check_id,
+        pre_check_result: preCheckResult,
+        confirm_result: confirmResult,
+      });
+    } catch {
+      onSubmit?.({ ...(pendingPayload || buildPayload()), pre_check_id: preCheckResult.pre_check_id });
+    } finally {
+      setShowFraudWarning(false);
+    }
+  }, [buildPayload, onSubmit, pendingPayload, preCheckResult]);
+
+  const handleCancel = useCallback(async () => {
+    try {
+      if (preCheckResult?.pre_check_id) {
+        await cancelPayment(preCheckResult.pre_check_id, 'User cancelled from FraudWarningModal');
+      }
+    } catch {
+      // keep UX responsive even if cancel API fails
+    } finally {
+      setShowFraudWarning(false);
+    }
+  }, [preCheckResult?.pre_check_id]);
 
   return (
     <div className="screen-stack">
@@ -100,21 +186,25 @@ export default function PayScreen({ draft, onBack, onSubmit }) {
       <button
         type="button"
         className="pay-cta"
-        disabled={!canPay}
-        onClick={() =>
-          onSubmit({
-            receiver_upi: receiverUpi.trim().toLowerCase(),
-            amount,
-            transaction_type: transactionType,
-            note: note.trim(),
-            sender_device_id: draft?.sender_device_id || undefined,
-            receiver_name: receiverInfo?.display_name,
-          })
-        }
+        disabled={!canPay || isChecking}
+        onClick={handlePayPress}
       >
-        <strong>Pay {canPay ? formatIndianCurrency(amount) : ''}</strong>
-        <small>Protected by ShieldPay</small>
+        <strong>{isChecking ? 'Checking Risk...' : `Pay ${canPay ? formatIndianCurrency(amount) : ''}`}</strong>
+        <small>{isChecking ? 'Running AI pre-check' : 'Protected by ShieldPay'}</small>
       </button>
+
+      <FraudWarningModal
+        visible={showFraudWarning}
+        riskScore={Number(preCheckResult?.risk_score || preCheckResult?.fraud_score || 0)}
+        riskTier={preCheckResult?.risk_tier || preCheckResult?.user_warning?.risk_tier}
+        reasons={preCheckResult?.user_warning?.reasons_display || preCheckResult?.reasons || []}
+        receiverUpi={receiverUpi.trim().toLowerCase()}
+        amount={amount}
+        transactionType={transactionType}
+        isNewReceiver={Boolean(Number(preCheckResult?.raw?.is_new_receiver || 0))}
+        onProceed={handleProceed}
+        onCancel={handleCancel}
+      />
     </div>
   );
 }

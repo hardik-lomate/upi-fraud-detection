@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, func, desc
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
@@ -248,6 +248,107 @@ def count_recent_sender_transactions(sender_upi: str, seconds: int = 60) -> int:
             .filter(TransactionRecord.created_at >= cutoff)
             .count()
         )
+    finally:
+        db.close()
+
+
+def count_receiver_transactions(receiver_upi: str) -> int:
+    db = SessionLocal()
+    try:
+        return db.query(TransactionRecord).filter(TransactionRecord.receiver_upi == receiver_upi).count()
+    finally:
+        db.close()
+
+
+def get_receiver_sender_stats_24h(receiver_upi: str) -> dict:
+    db = SessionLocal()
+    try:
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+        rows = (
+            db.query(TransactionRecord.sender_upi)
+            .filter(TransactionRecord.receiver_upi == receiver_upi)
+            .filter(TransactionRecord.created_at >= cutoff)
+            .all()
+        )
+        senders = [str(r[0]) for r in rows if r and r[0]]
+        total = len(senders)
+        unique = len(set(senders))
+        ratio = (unique / total) if total > 0 else 0.0
+        return {
+            "total": total,
+            "unique_senders": unique,
+            "new_sender_ratio": round(ratio, 4),
+        }
+    finally:
+        db.close()
+
+
+def get_receiver_upi_age_days(receiver_upi: str) -> int:
+    db = SessionLocal()
+    try:
+        first_seen = (
+            db.query(func.min(TransactionRecord.created_at))
+            .filter(TransactionRecord.receiver_upi == receiver_upi)
+            .scalar()
+        )
+        if not first_seen:
+            return -1
+        return int((datetime.utcnow() - first_seen).total_seconds() // 86400)
+    finally:
+        db.close()
+
+
+def get_sender_last_n_fraud_score_avg(sender_upi: str, n: int = 5) -> float:
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(TransactionRecord.fraud_score)
+            .filter(TransactionRecord.sender_upi == sender_upi)
+            .order_by(desc(TransactionRecord.id))
+            .limit(max(1, n))
+            .all()
+        )
+        scores = [float(r[0] or 0.0) for r in rows]
+        if not scores:
+            return 0.0
+        return float(sum(scores) / len(scores))
+    finally:
+        db.close()
+
+
+def count_receiver_flagged_transactions(receiver_upi: str) -> int:
+    db = SessionLocal()
+    try:
+        return (
+            db.query(TransactionRecord)
+            .filter(TransactionRecord.receiver_upi == receiver_upi)
+            .filter(TransactionRecord.decision.in_(["BLOCK", "VERIFY"]))
+            .count()
+        )
+    finally:
+        db.close()
+
+
+def get_sender_90d_amount_profile(sender_upi: str) -> dict:
+    db = SessionLocal()
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=90)
+        amounts = [
+            float(r[0] or 0.0)
+            for r in (
+                db.query(TransactionRecord.amount)
+                .filter(TransactionRecord.sender_upi == sender_upi)
+                .filter(TransactionRecord.created_at >= cutoff)
+                .all()
+            )
+        ]
+        if not amounts:
+            return {"count": 0, "avg": 0.0, "max": 0.0}
+        return {
+            "count": len(amounts),
+            "avg": float(sum(amounts) / len(amounts)),
+            "max": float(max(amounts)),
+        }
     finally:
         db.close()
 

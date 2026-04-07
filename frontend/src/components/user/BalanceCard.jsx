@@ -8,7 +8,14 @@ function mapShieldState(status) {
   return 'safe';
 }
 
-export default function BalanceCard({ balance = 0, securityStatus = 'PROTECTED', lastDecision = 'ALLOW' }) {
+export default function BalanceCard({
+  balance = 0,
+  securityStatus = 'PROTECTED',
+  lastDecision = 'ALLOW',
+  transactionsAnalyzedToday = 0,
+  blockedToday = 0,
+  userSafetyRating = 0,
+}) {
   const shieldState = mapShieldState(lastDecision);
 
   return (
@@ -20,6 +27,11 @@ export default function BalanceCard({ balance = 0, securityStatus = 'PROTECTED',
           {securityStatus === 'AT_RISK' ? 'AT RISK' : 'PROTECTED'}
         </div>
         <div className="balance-sub">ShieldPay protection active</div>
+        <div className="balance-sub" style={{ marginTop: 10 }}>
+          Transactions analyzed today: {transactionsAnalyzedToday}
+        </div>
+        <div className="balance-sub">Fraud blocked today: {blockedToday}</div>
+        <div className="balance-sub">Your protection score: {userSafetyRating}</div>
       </div>
       <div className="balance-shield">
         <ShieldAnimation state={shieldState} size={82} />

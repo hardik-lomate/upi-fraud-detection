@@ -19,23 +19,40 @@ FEATURE_COLUMNS = [
     "is_weekend",
     "txn_type_encoded",
     "sender_txn_count_24h",
+    "sender_txn_count_1h",
+    "sender_txn_count_1min",
     "sender_avg_amount",
     "sender_std_amount",
+    "sender_max_amount_7d",
     "amount_deviation",
+    "amount_to_avg_ratio",
+    "amount_percentile_sender",
     "sender_unique_receivers_24h",
+    "sender_unique_receivers_7d",
     "is_new_device",
     "is_new_receiver",
-]
-
-# Extended features for v3.0 — used by feature store, not in base model input
-EXTENDED_FEATURES = [
+    "receiver_seen_count",
+    "receiver_new_sender_ratio_24h",
     "sender_velocity_1min",
     "sender_velocity_5min",
+    "geo_distance_km",
+    "is_impossible_travel",
     "vpa_suffix_risk_score",
     "upi_age_days",
-    "receiver_new_sender_ratio_24h",
-    "amount_percentile_sender",
-    "cross_bank_ratio",
+    "cross_bank_flag",
+    "is_high_risk_hour",
+    "txn_amount_rank_7d",
+    "sender_fraud_score_history",
+    "receiver_fraud_flag_count",
+]
+
+# Extended features for UI and adaptive logic
+EXTENDED_FEATURES = [
+    "shap_top_feature_1",
+    "shap_top_feature_2",
+    "shap_top_feature_3",
+    "adaptive_risk_score",
+    "user_behavior_drift_score",
 ]
 
 # ======================================================================
@@ -59,18 +76,57 @@ WEEKEND_DAY_CUTOFF = 5     # day_of_week >= 5 → is_weekend = 1
 # ======================================================================
 # DECISION THRESHOLDS
 # ======================================================================
-THRESHOLD_FLAG = 0.3        # score >= 0.3 → FLAG
-THRESHOLD_BLOCK = 0.7       # score >= 0.7 → BLOCK
+THRESHOLD_LOW = 0.30
+THRESHOLD_MEDIUM = 0.55
+THRESHOLD_HIGH = 0.75
+THRESHOLD_BLOCK = 0.75
+THRESHOLD_WARN = 0.40
+
+# Backward-compatible aliases used by older code paths
+THRESHOLD_FLAG = THRESHOLD_WARN
+
+RISK_TIER_MAP = {
+    "LOW": {
+        "min": 0.0,
+        "max": 0.39,
+        "action": "ALLOW",
+        "ui_color": "#22c55e",
+        "user_message": "Transaction looks safe. Proceed!",
+    },
+    "MEDIUM": {
+        "min": 0.40,
+        "max": 0.74,
+        "action": "WARN",
+        "ui_color": "#f59e0b",
+        "user_message": "This transaction has some unusual signals. Review before proceeding.",
+    },
+    "HIGH": {
+        "min": 0.75,
+        "max": 1.0,
+        "action": "BLOCK",
+        "ui_color": "#ef4444",
+        "user_message": "High fraud risk detected. Payment blocked for your protection.",
+    },
+}
+
+
+def get_risk_tier(score: float) -> str:
+    """Map model score to LOW/MEDIUM/HIGH tier."""
+    if score >= THRESHOLD_HIGH:
+        return "HIGH"
+    if score >= THRESHOLD_WARN:
+        return "MEDIUM"
+    return "LOW"
 
 # ======================================================================
 # MODEL CONFIG
 # ======================================================================
-MODEL_VERSION = "3.0.0"
+MODEL_VERSION = "4.0.0"
 ENSEMBLE_DEFAULTS = {
+    "lightgbm": 0.35,
     "xgboost": 0.30,
-    "lightgbm": 0.30,
     "catboost": 0.25,
-    "isolation_forest": 0.15,
+    "isolation_forest": 0.10,
 }
 
 # ======================================================================

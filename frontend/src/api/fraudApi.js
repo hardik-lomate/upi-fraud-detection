@@ -31,6 +31,25 @@ export async function payTransaction(payload) {
   return res.data;
 }
 
+export async function preCheck(payload) {
+  const res = await api.post('/api/v1/pre-check', payload);
+  return res.data;
+}
+
+export async function confirmPayment(preCheckId, userOverride = true) {
+  const res = await api.post(`/api/v1/pre-check/${preCheckId}/confirm`, {
+    user_override: Boolean(userOverride),
+  });
+  return res.data;
+}
+
+export async function cancelPayment(preCheckId, reason = 'User cancelled payment') {
+  const res = await api.post(`/api/v1/pre-check/${preCheckId}/cancel`, {
+    reason,
+  });
+  return res.data;
+}
+
 export async function fetchMyTransactions(senderUpi, limit = 50, status = '') {
   const params = new URLSearchParams({
     sender_upi: senderUpi,
@@ -71,6 +90,16 @@ export async function fetchFlaggedUsers(limit = 50) {
 
 export async function fetchMonitoringStats() {
   const res = await api.get('/monitoring/stats');
+  return res.data;
+}
+
+export async function fetchModelMetrics() {
+  const res = await api.get('/api/v1/model/metrics');
+  return res.data;
+}
+
+export async function fetchConfusionMatrix() {
+  const res = await api.get('/api/v1/model/confusion-matrix');
   return res.data;
 }
 

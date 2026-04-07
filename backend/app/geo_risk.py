@@ -146,3 +146,48 @@ def check_impossible_travel(
             if is_suspicious else ""
         ),
     }
+
+
+def calculate_travel_impossibility(lat1, lon1, ts1, lat2, lon2, ts2) -> dict:
+    """
+    Compute distance/speed based travel impossibility as a reusable first-class feature.
+    Returns a normalized verdict payload consumed by serving features and rules.
+    """
+    try:
+        result = check_impossible_travel(
+            float(lat1), float(lon1), str(ts1),
+            float(lat2), float(lon2), str(ts2),
+        )
+    except Exception:
+        return {
+            "is_impossible": False,
+            "distance_km": 0.0,
+            "required_speed_kmh": 0.0,
+            "time_diff_minutes": -1.0,
+            "verdict_reason": "Travel check unavailable",
+        }
+
+    impossible = bool(result.get("is_impossible", False))
+    suspicious = bool(result.get("is_suspicious", False))
+    distance_km = float(result.get("distance_km", 0.0))
+    speed_kmh = float(result.get("speed_kmh", 0.0))
+    time_diff_minutes = float(result.get("time_diff_minutes", -1.0))
+
+    if impossible:
+        verdict_reason = (
+            f"Location jump of {distance_km:.1f}km in {time_diff_minutes:.1f} minutes is physically impossible"
+        )
+    elif suspicious:
+        verdict_reason = (
+            f"Rapid travel detected: {distance_km:.1f}km in {time_diff_minutes:.1f} minutes"
+        )
+    else:
+        verdict_reason = "Location change is plausible"
+
+    return {
+        "is_impossible": impossible,
+        "distance_km": distance_km,
+        "required_speed_kmh": speed_kmh,
+        "time_diff_minutes": time_diff_minutes,
+        "verdict_reason": verdict_reason,
+    }

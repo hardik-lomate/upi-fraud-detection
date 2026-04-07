@@ -18,6 +18,96 @@ class RuleResult:
 
 # --- Rule Definitions ---
 
+def rule_burst_1min(txn: dict) -> RuleResult:
+    """Block bursty payment behavior that resembles scripted bot execution."""
+    count = max(
+        int(txn.get("sender_txn_count_1min", 0) or 0),
+        int(txn.get("_sender_txn_count_1min", 0) or 0),
+        int(txn.get("_sender_txn_count_60s", 0) or 0),
+    )
+    if count >= 5:
+        return RuleResult(
+            True,
+            "BURST_1MIN",
+            f"{count} payments in the last 60 seconds — possible automated fraud",
+            "BLOCK",
+        )
+    return RuleResult(False)
+
+
+def rule_unknown_receiver_high_amount(txn: dict) -> RuleResult:
+    """Flag high-value transfer to a first-time receiver."""
+    amount = float(txn.get("amount", 0) or 0)
+    is_new_receiver = int(txn.get("is_new_receiver", 0) or 0) == 1
+    if is_new_receiver and amount > 10000:
+        return RuleResult(
+            True,
+            "UNKNOWN_RECEIVER_HIGH_AMOUNT",
+            f"First-ever payment of Rs.{amount:,.0f} to unknown UPI ID",
+            "FLAG",
+        )
+    return RuleResult(False)
+
+
+def rule_impossible_travel(txn: dict) -> RuleResult:
+    """Block when current location is impossible relative to last known transaction."""
+    distance = float(txn.get("geo_distance_km", 0.0) or 0.0)
+    minutes = float(txn.get("_time_since_last_txn_minutes", -1.0) or -1.0)
+    impossible = int(txn.get("is_impossible_travel", 0) or 0) == 1
+    if impossible or (distance > 500 and 0 <= minutes < 30):
+        return RuleResult(
+            True,
+            "IMPOSSIBLE_TRAVEL",
+            f"Location jump of {distance:.1f}km in {max(minutes, 0):.1f} minutes is physically impossible",
+            "BLOCK",
+        )
+    return RuleResult(False)
+
+
+def rule_suspicious_vpa(txn: dict) -> RuleResult:
+    """Flag receiver UPI IDs that look suspicious or unverified."""
+    score = float(txn.get("vpa_suffix_risk_score", 0.0) or 0.0)
+    if score >= 0.8:
+        return RuleResult(
+            True,
+            "SUSPICIOUS_VPA",
+            "Receiver UPI ID pattern matches known scam identifiers",
+            "FLAG",
+        )
+    return RuleResult(False)
+
+
+def rule_otp_time_correlation(txn: dict) -> RuleResult:
+    """Flag potential OTP/social-engineering behavior near recharge-like actions."""
+    explicit = bool(txn.get("_otp_time_correlation", False))
+    txn_type = str(txn.get("_transaction_type") or txn.get("transaction_type") or "").lower()
+    is_new_receiver = int(txn.get("is_new_receiver", 0) or 0) == 1
+    count_1min = int(txn.get("_sender_txn_count_1min", 0) or 0)
+
+    inferred = txn_type in {"recharge", "bill_payment"} and is_new_receiver and count_1min >= 1
+    if explicit or inferred:
+        return RuleResult(
+            True,
+            "OTP_TIME_CORRELATION",
+            "Payment immediately after OTP-type activity — possible SIM swap / social-engineering scam",
+            "FLAG",
+        )
+    return RuleResult(False)
+
+
+def rule_receiver_flagged_history(txn: dict) -> RuleResult:
+    """Block if receiver has repeated fraud-linked history."""
+    count = int(txn.get("receiver_fraud_flag_count", 0) or 0)
+    if count >= 3:
+        return RuleResult(
+            True,
+            "RECEIVER_FLAGGED_HISTORY",
+            f"Receiver UPI has been flagged {count} times for fraud previously",
+            "BLOCK",
+        )
+    return RuleResult(False)
+
+
 def rule_amount_limit(txn: dict) -> RuleResult:
     """Block transactions above ₹1,00,000 from accounts with < 5 historical txns."""
     amount = txn.get("amount", 0)
@@ -90,6 +180,12 @@ def rule_new_device_high_amount(txn: dict) -> RuleResult:
 # --- Rule Registry ---
 
 ALL_RULES = [
+    rule_burst_1min,
+    rule_impossible_travel,
+    rule_receiver_flagged_history,
+    rule_unknown_receiver_high_amount,
+    rule_suspicious_vpa,
+    rule_otp_time_correlation,
     rule_amount_limit,
     rule_rapid_fire,
     rule_midnight_high_value,
