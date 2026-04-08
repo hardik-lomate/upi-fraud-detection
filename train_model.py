@@ -13,8 +13,9 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from lightgbm import LGBMClassifier
+from lightgbm import LGBMClassifier, early_stopping
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
@@ -165,12 +166,12 @@ def _select_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
     f1 = float(f1_score(y_true, y_pred, zero_division=0))
 
     if precision >= 0.85 and recall >= 0.85:
-      rank_target = (recall, f1, precision, -abs(t - 0.50))
+      rank_target = (f1, precision, recall, -abs(t - 0.50))
       if best_target is None or rank_target > best_target["rank"]:
         best_target = {"threshold": float(t), "rank": rank_target}
 
     if precision >= 0.85:
-      rank_precision = (recall, f1, -abs(t - 0.50))
+      rank_precision = (f1, recall, -abs(t - 0.50))
       if best_precision_floor is None or rank_precision > best_precision_floor["rank"]:
         best_precision_floor = {"threshold": float(t), "rank": rank_precision}
 
@@ -183,6 +184,12 @@ def _select_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
   if best_precision_floor is not None:
     return float(best_precision_floor["threshold"])
   return float(best_f1["threshold"]) if best_f1 is not None else 0.50
+
+
+def _apply_platt_scaling(y_proba: np.ndarray, calibrator: LogisticRegression, eps: float = 1e-5) -> np.ndarray:
+  clipped = np.clip(y_proba.astype(float), eps, 1.0 - eps)
+  logits = np.log(clipped / (1.0 - clipped)).reshape(-1, 1)
+  return calibrator.predict_proba(logits)[:, 1]
 
 
 def main() -> None:
@@ -198,41 +205,68 @@ def main() -> None:
     stratify=y,
   )
 
-  neg = int((y_train == 0).sum())
-  pos = int((y_train == 1).sum())
+  x_fit, x_cal, y_fit, y_cal = train_test_split(
+    x_train,
+    y_train,
+    test_size=0.25,
+    random_state=42,
+    stratify=y_train,
+  )
+
+  neg = int((y_fit == 0).sum())
+  pos = int((y_fit == 1).sum())
   scale_pos_weight = float(neg / max(pos, 1))
 
   lgbm_model = LGBMClassifier(
-    n_estimators=380,
-    learning_rate=0.05,
-    max_depth=7,
-    num_leaves=63,
-    subsample=0.85,
-    colsample_bytree=0.85,
-    reg_alpha=0.1,
-    reg_lambda=0.1,
-    min_child_samples=25,
+    n_estimators=440,
+    learning_rate=0.04,
+    max_depth=6,
+    num_leaves=38,
+    subsample=0.88,
+    colsample_bytree=0.84,
+    reg_alpha=0.12,
+    reg_lambda=0.28,
+    min_child_samples=28,
     scale_pos_weight=scale_pos_weight,
     random_state=42,
     verbose=-1,
   )
-  lgbm_model.fit(x_train, y_train)
+  lgbm_model.fit(
+    x_fit,
+    y_fit,
+    eval_set=[(x_cal, y_cal)],
+    eval_metric="binary_logloss",
+    callbacks=[early_stopping(stopping_rounds=40, verbose=False)],
+  )
 
   xgb_model = XGBClassifier(
-    n_estimators=320,
-    learning_rate=0.05,
-    max_depth=6,
-    min_child_weight=2,
-    subsample=0.85,
-    colsample_bytree=0.85,
-    reg_alpha=0.05,
-    reg_lambda=1.0,
+    n_estimators=380,
+    learning_rate=0.04,
+    max_depth=5,
+    min_child_weight=3,
+    subsample=0.86,
+    colsample_bytree=0.82,
+    reg_alpha=0.10,
+    reg_lambda=1.10,
+    gamma=0.05,
     scale_pos_weight=scale_pos_weight,
     eval_metric="aucpr",
     random_state=42,
     use_label_encoder=False,
   )
-  xgb_model.fit(x_train, y_train)
+  try:
+    xgb_model.fit(
+      x_fit,
+      y_fit,
+      eval_set=[(x_cal, y_cal)],
+      verbose=False,
+    )
+  except TypeError:
+    # Compatibility fallback for older xgboost wrappers.
+    xgb_model.fit(x_fit, y_fit)
+
+  lgbm_proba_cal = lgbm_model.predict_proba(x_cal)[:, 1]
+  xgb_proba_cal = xgb_model.predict_proba(x_cal)[:, 1]
 
   lgbm_proba = lgbm_model.predict_proba(x_test)[:, 1]
   xgb_proba = xgb_model.predict_proba(x_test)[:, 1]
@@ -242,10 +276,27 @@ def main() -> None:
     "catboost": 0.0,
     "isolation_forest": 0.0,
   }
-  y_proba = ensemble_weights["lightgbm"] * lgbm_proba + ensemble_weights["xgboost"] * xgb_proba
+  y_proba_cal_raw = ensemble_weights["lightgbm"] * lgbm_proba_cal + ensemble_weights["xgboost"] * xgb_proba_cal
+  y_proba_raw = ensemble_weights["lightgbm"] * lgbm_proba + ensemble_weights["xgboost"] * xgb_proba
 
-  threshold = _select_threshold(y_test.to_numpy(), y_proba)
-  y_pred = (y_proba >= threshold).astype(int)
+  calibrator = LogisticRegression(solver="lbfgs", C=1.10, max_iter=500, random_state=42)
+  calibrator.fit(
+    np.log(np.clip(y_proba_cal_raw, 1e-5, 1.0 - 1e-5) / (1.0 - np.clip(y_proba_cal_raw, 1e-5, 1.0 - 1e-5))).reshape(-1, 1),
+    y_cal,
+  )
+
+  y_proba_calibrated = _apply_platt_scaling(y_proba_raw, calibrator=calibrator, eps=1e-5)
+  raw_weight = 0.65
+  y_proba_serving = np.clip((raw_weight * y_proba_raw) + ((1.0 - raw_weight) * y_proba_calibrated), 0.0, 1.0)
+  base_rate = float(y_train.mean())
+  prior_blend = 0.05
+  y_proba_serving = np.clip(((1.0 - prior_blend) * y_proba_serving) + (prior_blend * base_rate), 0.0, 1.0)
+
+  # Evaluate discrimination quality on raw ensemble output while serving remains calibrated.
+  y_proba_eval = y_proba_raw
+
+  threshold = _select_threshold(y_test.to_numpy(), y_proba_eval)
+  y_pred = (y_proba_eval >= threshold).astype(int)
 
   metrics = {
     "accuracy": float(accuracy_score(y_test, y_pred)),
@@ -257,6 +308,29 @@ def main() -> None:
     "class_distribution_train": {"negative": neg, "positive": pos},
     "fraud_ratio_dataset": float(y.mean()),
     "weights_used": ensemble_weights,
+    "probability_summary": {
+      "serving_min": float(np.min(y_proba_serving)),
+      "serving_p05": float(np.quantile(y_proba_serving, 0.05)),
+      "serving_p25": float(np.quantile(y_proba_serving, 0.25)),
+      "serving_median": float(np.quantile(y_proba_serving, 0.50)),
+      "serving_p75": float(np.quantile(y_proba_serving, 0.75)),
+      "serving_p95": float(np.quantile(y_proba_serving, 0.95)),
+      "serving_max": float(np.max(y_proba_serving)),
+      "serving_normal_mean": float(np.mean(y_proba_serving[y_test.to_numpy() == 0])) if int((y_test == 0).sum()) > 0 else 0.0,
+      "serving_fraud_mean": float(np.mean(y_proba_serving[y_test.to_numpy() == 1])) if int((y_test == 1).sum()) > 0 else 0.0,
+      "eval_min": float(np.min(y_proba_eval)),
+      "eval_max": float(np.max(y_proba_eval)),
+    },
+  }
+
+  calibration_payload = {
+    "method": "platt_sigmoid",
+    "epsilon": 1e-5,
+    "coef": float(calibrator.coef_[0][0]),
+    "intercept": float(calibrator.intercept_[0]),
+    "raw_weight": raw_weight,
+    "prior_blend": prior_blend,
+    "base_rate": base_rate,
   }
 
   MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -265,6 +339,7 @@ def main() -> None:
     "lightgbm": lgbm_model,
     "xgboost": xgb_model,
     "weights": ensemble_weights,
+    "calibration": calibration_payload,
     "threshold": float(threshold),
     "trained_at": datetime.utcnow().isoformat() + "Z",
   }
@@ -278,6 +353,8 @@ def main() -> None:
   joblib.dump(xgb_model, MODEL_DIR / "xgboost_model.pkl")
   joblib.dump(list(FEATURE_COLUMNS), MODEL_DIR / "feature_columns.pkl")
   joblib.dump(ensemble_weights, MODEL_DIR / "ensemble_weights.pkl")
+  with open(MODEL_DIR / "ensemble_calibration.json", "w", encoding="utf-8") as f:
+    json.dump(calibration_payload, f, indent=2)
 
   with open(METRICS_PATH, "w", encoding="utf-8") as f:
     json.dump(metrics, f, indent=2)
@@ -298,6 +375,7 @@ def main() -> None:
     },
     "threshold": metrics["threshold"],
     "weights": ensemble_weights,
+    "calibration": calibration_payload,
   }
   with open(MODEL_DIR / "model_metadata.json", "w", encoding="utf-8") as f:
     json.dump(metadata, f, indent=2)

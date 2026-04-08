@@ -1,22 +1,22 @@
 {
-  "accuracy": 0.9741666666666666,
-  "precision": 0.8669950738916257,
-  "recall": 0.9777777777777777,
-  "f1_score": 0.9190600522193212,
+  "accuracy": 0.975,
+  "precision": 0.9310344827586207,
+  "recall": 0.9,
+  "f1_score": 0.9152542372881356,
   "confusion_matrix": [
     [
-      993,
-      27
+      1008,
+      12
     ],
     [
-      4,
-      176
+      18,
+      162
     ]
   ],
-  "threshold": 0.35,
+  "threshold": 0.79,
   "class_distribution_train": {
-    "negative": 4080,
-    "positive": 720
+    "negative": 3060,
+    "positive": 540
   },
   "fraud_ratio_dataset": 0.15,
   "weights_used": {
@@ -24,5 +24,18 @@
     "xgboost": 0.45,
     "catboost": 0.0,
     "isolation_forest": 0.0
+  },
+  "probability_summary": {
+    "serving_min": 0.008094666165220346,
+    "serving_p05": 0.008274318038791017,
+    "serving_p25": 0.008680544474558086,
+    "serving_median": 0.010952822481762273,
+    "serving_p75": 0.06824439134769648,
+    "serving_p95": 0.941544441847925,
+    "serving_max": 0.9435067772832432,
+    "serving_normal_mean": 0.04990669592085449,
+    "serving_fraud_mean": 0.851573654913197,
+    "eval_min": 0.0004094883136762863,
+    "eval_max": 0.9975845329675405
   }
 }

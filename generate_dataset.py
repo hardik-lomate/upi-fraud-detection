@@ -35,12 +35,21 @@ CITIES = [
 
 FRAUD_PATTERNS = [
     "high_amount_new_device",
-    "high_velocity",
-    "unusual_time",
+    "high_velocity_no_new_device",
+    "unusual_time_medium_deviation",
     "large_amount_deviation",
     "high_failed_attempts",
     "suspicious_graph_connections",
-    "behavioral_anomaly_low_behavior_score",
+    "blended_low_signal_fraud",
+]
+
+FRAUD_PATTERN_WEIGHTS = [0.18, 0.17, 0.16, 0.17, 0.14, 0.14, 0.04]
+
+NORMAL_EDGE_PATTERNS = [
+    "normal_high_amount_known_device",
+    "normal_night_low_amount",
+    "normal_new_device_low_value",
+    "normal_velocity_burst_known_context",
 ]
 
 TXN_TYPES = ["purchase", "transfer", "bill_payment", "recharge"]
@@ -123,96 +132,191 @@ def generate_dataset(
         base_std = float(profile["std_amount"])
 
         pattern = "normal"
+        profile_type = "standard"
+        severity = "baseline"
         if label == 1:
-            pattern = str(rng.choice(FRAUD_PATTERNS))
+            pattern = str(rng.choice(FRAUD_PATTERNS, p=FRAUD_PATTERN_WEIGHTS))
+            severity = "moderate" if rng.random() < 0.28 else "severe"
 
-        transaction_velocity = int(max(1, rng.poisson(profile["base_velocity"])))
-        failed_attempts = int(max(0, rng.poisson(0.4)))
-        is_new_device = int(rng.random() < 0.03)
+        transaction_velocity = int(max(1, rng.poisson(profile["base_velocity"] + 0.2)))
+        failed_attempts = int(max(0, rng.poisson(0.6)))
+        is_new_device = int(rng.random() < 0.05)
         device_id = profile["secondary_device"] if is_new_device else profile["primary_device"]
         city_name = profile["home_city"]
         txn_type = str(rng.choice(TXN_TYPES, p=[0.45, 0.28, 0.17, 0.10]))
 
-        amount = float(max(20.0, rng.normal(loc=avg_amount, scale=max(60.0, base_std * 0.75))))
+        amount = float(max(20.0, rng.normal(loc=avg_amount, scale=max(65.0, base_std * 0.85))))
         merchant_risk = float(merchant_risk_map[merchant])
-        graph_risk = float(rng.beta(2.2, 7.2))
+        graph_risk = float(rng.beta(2.4, 6.4))
 
         if label == 1:
             if pattern == "high_amount_new_device":
-                amount = float(avg_amount * rng.uniform(4.0, 10.0))
-                is_new_device = 1
-                device_id = f"DEV_ATTACK_{idx:06d}"
-                failed_attempts += int(rng.integers(2, 6))
-                merchant_risk = max(merchant_risk, float(rng.uniform(0.65, 0.95)))
-                graph_risk = max(graph_risk, float(rng.uniform(0.55, 0.90)))
+                profile_type = f"fraud_{severity}"
+                if severity == "moderate":
+                    amount = float(avg_amount * rng.uniform(2.4, 4.8))
+                    transaction_velocity = max(transaction_velocity, int(rng.integers(5, 15)))
+                    failed_attempts += int(rng.integers(2, 7))
+                    is_new_device = int(rng.random() < 0.75)
+                    merchant_risk = max(merchant_risk, float(rng.uniform(0.50, 0.85)))
+                    graph_risk = max(graph_risk, float(rng.uniform(0.45, 0.78)))
+                else:
+                    amount = float(avg_amount * rng.uniform(4.8, 9.5))
+                    transaction_velocity = max(transaction_velocity, int(rng.integers(10, 30)))
+                    failed_attempts += int(rng.integers(4, 10))
+                    is_new_device = int(rng.random() < 0.95)
+                    merchant_risk = max(merchant_risk, float(rng.uniform(0.68, 0.95)))
+                    graph_risk = max(graph_risk, float(rng.uniform(0.60, 0.92)))
+                if is_new_device:
+                    device_id = f"DEV_ATTACK_{idx:06d}"
                 txn_type = "transfer"
                 receiver_upi = f"urgent.kyc.verify.{idx % 250}@upi"
+                if rng.random() < (0.55 if severity == "moderate" else 0.80):
+                    suspicious_hour = int(rng.choice([0, 1, 2, 3, 4]))
+                    ts = ts.replace(hour=suspicious_hour, minute=int(rng.integers(0, 60)))
 
-            elif pattern == "high_velocity":
-                transaction_velocity = int(rng.integers(14, 46))
-                amount = float(avg_amount * rng.uniform(1.8, 4.8))
-                failed_attempts += int(rng.integers(2, 7))
-                merchant_risk = max(merchant_risk, float(rng.uniform(0.55, 0.85)))
-                graph_risk = max(graph_risk, float(rng.uniform(0.55, 0.85)))
+            elif pattern == "high_velocity_no_new_device":
+                profile_type = f"fraud_{severity}"
+                if severity == "moderate":
+                    transaction_velocity = int(rng.integers(12, 32))
+                    amount = float(avg_amount * rng.uniform(1.6, 3.8))
+                    failed_attempts += int(rng.integers(2, 8))
+                    is_new_device = int(rng.random() < 0.20)
+                    merchant_risk = max(merchant_risk, float(rng.uniform(0.46, 0.78)))
+                    graph_risk = max(graph_risk, float(rng.uniform(0.45, 0.75)))
+                else:
+                    transaction_velocity = int(rng.integers(24, 58))
+                    amount = float(avg_amount * rng.uniform(2.2, 5.5))
+                    failed_attempts += int(rng.integers(6, 15))
+                    is_new_device = int(rng.random() < 0.35)
+                    merchant_risk = max(merchant_risk, float(rng.uniform(0.60, 0.90)))
+                    graph_risk = max(graph_risk, float(rng.uniform(0.60, 0.88)))
+                if is_new_device:
+                    device_id = f"DEV_VEL_{idx:06d}"
+                else:
+                    device_id = profile["primary_device"]
                 txn_type = "transfer"
 
-            elif pattern == "unusual_time":
-                suspicious_hour = int(rng.choice([0, 1, 2, 3, 4, 23]))
-                ts = ts.replace(hour=suspicious_hour, minute=int(rng.integers(0, 60)))
-                amount = float(avg_amount * rng.uniform(2.3, 5.5))
-                is_new_device = int(rng.random() < 0.7)
+            elif pattern == "unusual_time_medium_deviation":
+                profile_type = f"fraud_{severity}"
+                if rng.random() < (0.65 if severity == "moderate" else 0.85):
+                    suspicious_hour = int(rng.choice([0, 1, 2, 3, 4, 23]))
+                    ts = ts.replace(hour=suspicious_hour, minute=int(rng.integers(0, 60)))
+                amount = float(avg_amount * rng.uniform(2.0, 3.8 if severity == "moderate" else 6.2))
+                is_new_device = int(rng.random() < (0.45 if severity == "moderate" else 0.72))
                 if is_new_device:
                     device_id = f"DEV_NIGHT_{idx:06d}"
-                merchant_risk = max(merchant_risk, float(rng.uniform(0.62, 0.92)))
-                graph_risk = max(graph_risk, float(rng.uniform(0.50, 0.82)))
+                transaction_velocity = max(transaction_velocity, int(rng.integers(4, 16 if severity == "moderate" else 28)))
+                failed_attempts += int(rng.integers(1, 6 if severity == "moderate" else 11))
+                merchant_risk = max(merchant_risk, float(rng.uniform(0.48, 0.86 if severity == "moderate" else 0.93)))
+                graph_risk = max(graph_risk, float(rng.uniform(0.38, 0.74 if severity == "moderate" else 0.88)))
                 txn_type = "transfer"
                 receiver_upi = f"refund.support.helpdesk.{idx % 250}@upi"
 
             elif pattern == "large_amount_deviation":
-                amount = float(avg_amount * rng.uniform(6.0, 14.0))
-                failed_attempts += int(rng.integers(1, 4))
-                merchant_risk = max(merchant_risk, float(rng.uniform(0.58, 0.88)))
-                graph_risk = max(graph_risk, float(rng.uniform(0.45, 0.78)))
+                profile_type = f"fraud_{severity}"
+                amount = float(avg_amount * rng.uniform(2.8, 6.0 if severity == "moderate" else 11.5))
+                failed_attempts += int(rng.integers(1, 5 if severity == "moderate" else 10))
+                transaction_velocity = max(transaction_velocity, int(rng.integers(3, 14 if severity == "moderate" else 26)))
+                is_new_device = max(is_new_device, int(rng.random() < (0.35 if severity == "moderate" else 0.65)))
+                if is_new_device:
+                    device_id = f"DEV_DEV_{idx:06d}"
+                merchant_risk = max(merchant_risk, float(rng.uniform(0.46, 0.82 if severity == "moderate" else 0.92)))
+                graph_risk = max(graph_risk, float(rng.uniform(0.36, 0.70 if severity == "moderate" else 0.84)))
                 txn_type = "transfer"
 
             elif pattern == "high_failed_attempts":
-                failed_attempts += int(rng.integers(8, 20))
-                amount = float(avg_amount * rng.uniform(1.8, 4.5))
-                transaction_velocity = max(transaction_velocity, int(rng.integers(8, 26)))
-                is_new_device = int(rng.random() < 0.55)
+                profile_type = f"fraud_{severity}"
+                failed_attempts += int(rng.integers(5, 14 if severity == "moderate" else 24))
+                amount = float(avg_amount * rng.uniform(1.5, 3.6 if severity == "moderate" else 5.0))
+                transaction_velocity = max(transaction_velocity, int(rng.integers(6, 18 if severity == "moderate" else 34)))
+                is_new_device = int(rng.random() < (0.38 if severity == "moderate" else 0.60))
                 if is_new_device:
                     device_id = f"DEV_FAIL_{idx:06d}"
-                merchant_risk = max(merchant_risk, float(rng.uniform(0.55, 0.86)))
-                graph_risk = max(graph_risk, float(rng.uniform(0.48, 0.80)))
+                merchant_risk = max(merchant_risk, float(rng.uniform(0.44, 0.80 if severity == "moderate" else 0.90)))
+                graph_risk = max(graph_risk, float(rng.uniform(0.40, 0.72 if severity == "moderate" else 0.86)))
                 txn_type = "transfer"
 
             elif pattern == "suspicious_graph_connections":
-                amount = float(avg_amount * rng.uniform(2.0, 6.8))
-                graph_risk = max(graph_risk, float(rng.uniform(0.82, 0.99)))
-                merchant_risk = max(merchant_risk, float(rng.uniform(0.66, 0.95)))
-                transaction_velocity = max(transaction_velocity, int(rng.integers(6, 20)))
+                profile_type = f"fraud_{severity}"
+                amount = float(avg_amount * rng.uniform(1.8, 4.2 if severity == "moderate" else 7.0))
+                graph_risk = max(graph_risk, float(rng.uniform(0.64, 0.90 if severity == "moderate" else 0.99)))
+                merchant_risk = max(merchant_risk, float(rng.uniform(0.52, 0.84 if severity == "moderate" else 0.97)))
+                transaction_velocity = max(transaction_velocity, int(rng.integers(4, 14 if severity == "moderate" else 28)))
+                is_new_device = max(is_new_device, int(rng.random() < (0.22 if severity == "moderate" else 0.55)))
+                if is_new_device:
+                    device_id = f"DEV_GRAPH_{idx:06d}"
                 txn_type = "transfer"
                 receiver_upi = f"mule.collector.{idx % 40}@upi"
 
-            elif pattern == "behavioral_anomaly_low_behavior_score":
-                amount = float(avg_amount * rng.uniform(6.0, 14.0))
-                transaction_velocity = max(transaction_velocity, int(rng.integers(12, 36)))
-                failed_attempts += int(rng.integers(8, 20))
-                is_new_device = 1
-                device_id = f"DEV_BEHAV_{idx:06d}"
-                merchant_risk = max(merchant_risk, float(rng.uniform(0.78, 0.96)))
-                graph_risk = max(graph_risk, float(rng.uniform(0.72, 0.95)))
-                suspicious_hour = int(rng.choice([0, 1, 2, 3, 4, 23]))
-                ts = ts.replace(hour=suspicious_hour, minute=int(rng.integers(0, 60)))
-                txn_type = "transfer"
-                receiver_upi = f"behavior.anomaly.support.{idx % 180}@upi"
+            elif pattern == "blended_low_signal_fraud":
+                # Intentional low-to-moderate fraud profile to create realistic overlap.
+                profile_type = "fraud_borderline"
+                amount = float(avg_amount * rng.uniform(2.1, 3.3))
+                transaction_velocity = max(transaction_velocity, int(rng.integers(4, 12)))
+                failed_attempts += int(rng.integers(2, 9))
+                is_new_device = int(rng.random() < 0.35)
+                if is_new_device:
+                    device_id = f"DEV_BLEND_{idx:06d}"
+                if rng.random() < 0.35:
+                    suspicious_hour = int(rng.choice([1, 2, 3, 4, 23]))
+                    ts = ts.replace(hour=suspicious_hour, minute=int(rng.integers(0, 60)))
+                merchant_risk = max(merchant_risk, float(rng.uniform(0.40, 0.72)))
+                graph_risk = max(graph_risk, float(rng.uniform(0.45, 0.76)))
+                txn_type = str(rng.choice(["purchase", "transfer"], p=[0.40, 0.60]))
 
-        if label == 0 and rng.random() < 0.92:
+        if label == 0 and rng.random() < 0.06:
+            edge_pattern = str(rng.choice(NORMAL_EDGE_PATTERNS))
+            profile_type = f"normal_edge_{edge_pattern}"
+
+            if edge_pattern == "normal_high_amount_known_device":
+                amount = float(avg_amount * rng.uniform(1.9, 3.6))
+                is_new_device = 0
+                device_id = profile["primary_device"]
+                transaction_velocity = max(transaction_velocity, int(rng.integers(2, 8)))
+                failed_attempts = max(0, failed_attempts - int(rng.integers(0, 2)))
+                txn_type = "transfer"
+
+            elif edge_pattern == "normal_night_low_amount":
+                ts = ts.replace(hour=int(rng.choice([1, 2, 3, 4])), minute=int(rng.integers(0, 60)))
+                amount = float(avg_amount * rng.uniform(0.35, 1.10))
+                is_new_device = int(rng.random() < 0.05)
+                device_id = profile["secondary_device"] if is_new_device else profile["primary_device"]
+                transaction_velocity = max(1, int(rng.integers(1, 4)))
+                failed_attempts = max(0, failed_attempts - int(rng.integers(0, 2)))
+                txn_type = str(rng.choice(["bill_payment", "recharge"], p=[0.55, 0.45]))
+
+            elif edge_pattern == "normal_new_device_low_value":
+                is_new_device = 1
+                device_id = f"DEV_TRAVEL_{idx:06d}"
+                amount = float(avg_amount * rng.uniform(0.35, 1.35))
+                transaction_velocity = max(1, int(rng.integers(1, 6)))
+                failed_attempts = max(0, failed_attempts + int(rng.integers(0, 2)))
+                city_name = CITIES[int(rng.integers(0, len(CITIES)))][0]
+                merchant_risk = float(min(merchant_risk, rng.uniform(0.10, 0.45)))
+                graph_risk = float(min(graph_risk, rng.uniform(0.08, 0.35)))
+                txn_type = str(rng.choice(["purchase", "bill_payment", "recharge"], p=[0.30, 0.45, 0.25]))
+
+            elif edge_pattern == "normal_velocity_burst_known_context":
+                amount = float(avg_amount * rng.uniform(0.85, 1.85))
+                transaction_velocity = max(transaction_velocity, int(rng.integers(6, 13)))
+                failed_attempts = max(0, failed_attempts + int(rng.integers(0, 2)))
+                is_new_device = 0
+                device_id = profile["primary_device"]
+                txn_type = str(rng.choice(["bill_payment", "transfer"], p=[0.65, 0.35]))
+
+        # Inject slight noise for realistic overlap between classes.
+        amount *= float(rng.normal(1.0, 0.04 if label == 1 else 0.03))
+        transaction_velocity = int(max(1, round(transaction_velocity + rng.normal(0.0, 0.9))))
+        failed_attempts = int(max(0, round(failed_attempts + rng.normal(0.0, 0.7))))
+        merchant_risk = _clip01(float(merchant_risk + rng.normal(0.0, 0.025)))
+        graph_risk = _clip01(float(graph_risk + rng.normal(0.0, 0.03)))
+
+        if label == 0 and rng.random() < 0.90:
             hour = int(rng.integers(7, 22))
             ts = ts.replace(hour=hour, minute=int(rng.integers(0, 60)))
 
         city_name_now = city_name
-        if label == 1 and (pattern in {"unusual_time", "suspicious_graph_connections"} or is_new_device == 1):
+        if label == 1 and (pattern in {"unusual_time_medium_deviation", "suspicious_graph_connections"} or is_new_device == 1):
             city_name_now = CITIES[int(rng.integers(0, len(CITIES)))][0]
 
         hour_of_day = int(ts.hour)
@@ -221,7 +325,7 @@ def generate_dataset(
         amount_deviation = float((amount - avg_amount) / max(base_std, 75.0))
         location_shift = _city_distance_score(profile["home_city"], city_name_now)
 
-        behavior_score = _clip01(
+        behavior_base = _clip01(
             (0.30 * min(abs(amount_deviation) / 4.0, 1.0))
             + (0.25 * min(transaction_velocity / 20.0, 1.0))
             + (0.20 * is_new_device)
@@ -229,9 +333,14 @@ def generate_dataset(
             + (0.10 * location_shift)
         )
 
-        if label == 1 and pattern == "behavioral_anomaly_low_behavior_score":
-            # For this pattern, behavior_score is a stability signal where lower means anomaly.
-            behavior_score = float(rng.uniform(0.02, 0.15))
+        if label == 1:
+            behavior_score = _clip01(behavior_base + float(rng.normal(0.12, 0.08)))
+            if pattern == "blended_low_signal_fraud":
+                behavior_score = _clip01(behavior_score - float(rng.uniform(0.08, 0.18)))
+        else:
+            behavior_score = _clip01(behavior_base + float(rng.normal(-0.03, 0.06)))
+            if profile_type.startswith("normal_edge"):
+                behavior_score = _clip01(behavior_score + float(rng.uniform(0.04, 0.16)))
 
         generated.append(
             {
@@ -257,6 +366,7 @@ def generate_dataset(
                 "label": int(label),
                 "transaction_type": txn_type,
                 "fraud_pattern": pattern,
+                "scenario_profile": profile_type,
             }
         )
 

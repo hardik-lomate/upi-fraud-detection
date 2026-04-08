@@ -54,6 +54,25 @@ def _clamp01(v: float) -> float:
     return max(0.0, min(1.0, float(v)))
 
 
+def _moderate_isolated_ml_score(ml_score: float, support_peak: float) -> tuple[float, float]:
+    """Dampen isolated very-high ML confidence when other signals are weak.
+
+    This keeps risk distributions realistic while preserving ordering and thresholds.
+    """
+    ml = _clamp01(ml_score)
+    support = _clamp01(support_peak)
+
+    if ml >= 0.97 and support < 0.25:
+        adjusted = ml - (0.12 + (0.25 - support) * 0.10)
+    elif ml >= 0.93 and support < 0.35:
+        adjusted = ml - (0.06 + (0.35 - support) * 0.06)
+    else:
+        adjusted = ml
+
+    adjusted = _clamp01(adjusted)
+    return adjusted, round(ml - adjusted, 6)
+
+
 def compute_rules_score(rule_decision: str | None, rules_triggered: list[Any]) -> float:
     if not rules_triggered:
         return 0.0
@@ -98,11 +117,25 @@ def combine_risk_scores(
     # Normalize weights in case callers provide non-1.0 totals.
     w = {k: float(v) / weight_sum for k, v in w.items()}
 
-    components = {
+    components_raw = {
         "rules_score": _clamp01(rules_score),
         "ml_score": _clamp01(ml_score),
         "behavior_score": _clamp01(behavior_score),
         "graph_score": _clamp01(graph_score),
+    }
+
+    support_peak = max(
+        components_raw["rules_score"],
+        components_raw["behavior_score"],
+        components_raw["graph_score"],
+    )
+    adjusted_ml, ml_adjustment = _moderate_isolated_ml_score(components_raw["ml_score"], support_peak)
+
+    components = {
+        "rules_score": components_raw["rules_score"],
+        "ml_score": adjusted_ml,
+        "behavior_score": components_raw["behavior_score"],
+        "graph_score": components_raw["graph_score"],
     }
 
     risk_score = (
@@ -124,7 +157,12 @@ def combine_risk_scores(
         "components": components,
         "weights": {k: round(v, 6) for k, v in w.items()},
         "contributions": contributions,
+        "raw_components": components_raw,
+        "distribution_adjustment": {
+            "ml_tail_damping": ml_adjustment,
+            "support_peak": round(support_peak, 6),
+        },
         "weight_source": str(os.getenv("RISK_WEIGHTS_PATH", "").strip() or DEFAULT_WEIGHT_CONFIG_PATH),
-        "input_normalization": "All component scores are clamped to [0,1]; weights are normalized to sum=1.0",
+        "input_normalization": "All component scores are clamped to [0,1], isolated extreme ML tails are damped, and weights are normalized to sum=1.0",
         "weight_justification": dict(WEIGHT_JUSTIFICATION),
     }

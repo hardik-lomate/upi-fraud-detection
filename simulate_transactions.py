@@ -212,11 +212,24 @@ def main() -> None:
       "name": "Suspicious support-payment lure",
       "txn": _txn(f"f5.{run_tag}@upi", f"refund.support.helpdesk.{run_tag}@upi", 87000.0, "transfer", base.replace(hour=1, minute=47), "F5_NEW_DEVICE", *CHENNAI),
     },
+    {
+      "kind": "normal",
+      "name": "Borderline normal: late-night travel transfer",
+      "txn": _txn(f"n3.{run_tag}@upi", f"rent.{run_tag}@oksbi", 26500.0, "transfer", base.replace(hour=1, minute=26), "N3_TRAVEL_DEVICE", *DELHI),
+    },
+    {
+      "kind": "fraud",
+      "name": "Borderline fraud: moderate deviation rapid transfer",
+      "txn": _txn(f"f2.{run_tag}@upi", f"collector.{run_tag}@upi", 42000.0, "transfer", base + timedelta(minutes=31), "F2_DEVICE", *BENGALURU),
+    },
   ]
 
   results = []
 
-  print("DEMO SIMULATION (5 normal + 5 fraud)")
+  normal_total = sum(1 for c in cases if c["kind"] == "normal")
+  fraud_total = sum(1 for c in cases if c["kind"] == "fraud")
+
+  print(f"DEMO SIMULATION ({len(cases)} transactions | {normal_total} normal + {fraud_total} fraud)")
   print("=" * 120)
 
   for idx, case in enumerate(cases, start=1):
@@ -256,19 +269,27 @@ def main() -> None:
   normal_ml_scores = [r["component_scores"]["ml"] for r in results if r["kind"] == "normal"]
   fraud_ml_scores = [r["component_scores"]["ml"] for r in results if r["kind"] == "fraud"]
   fraud_high_actions = [r for r in results if r["kind"] == "fraud" and r["decision"] in {"STEP-UP", "BLOCK"}]
+  normal_stepups = [r for r in results if r["kind"] == "normal" and r["decision"] == "STEP-UP"]
+  fraud_stepups = [r for r in results if r["kind"] == "fraud" and r["decision"] == "STEP-UP"]
+  fraud_blocks = [r for r in results if r["kind"] == "fraud" and r["decision"] == "BLOCK"]
 
   print("-" * 120)
   print(
     "SUMMARY | "
     f"normal_avg={mean(normal_scores):.4f} | fraud_avg={mean(fraud_scores):.4f} | "
     f"normal_ml_avg={mean(normal_ml_scores):.4f} | fraud_ml_avg={mean(fraud_ml_scores):.4f} | "
-    f"fraud_stepup_or_block={len(fraud_high_actions)}/{len(fraud_scores)}"
+    f"fraud_stepup_or_block={len(fraud_high_actions)}/{len(fraud_scores)} | "
+    f"normal_stepup={len(normal_stepups)} | fraud_stepup={len(fraud_stepups)} | fraud_block={len(fraud_blocks)}"
   )
 
   if mean(fraud_scores) <= mean(normal_scores):
     raise SystemExit("Validation failed: fraud average risk_score is not higher than normal average")
   if mean(fraud_ml_scores) <= mean(normal_ml_scores):
     raise SystemExit("Validation failed: fraud average ML score is not higher than normal average")
+  if len(normal_stepups) == 0:
+    raise SystemExit("Validation failed: expected at least one normal STEP-UP borderline case")
+  if len(fraud_stepups) == 0:
+    raise SystemExit("Validation failed: expected at least one fraud STEP-UP case (not all fraud should be BLOCK)")
 
   print("Validation passed: fraud scenarios score higher risk than normal scenarios.")
 
