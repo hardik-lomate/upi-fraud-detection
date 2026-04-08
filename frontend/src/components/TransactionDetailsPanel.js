@@ -1,8 +1,5 @@
 import React from 'react';
 import StatusBadge, { isVerify } from './StatusBadge';
-import FraudScoreGauge from './FraudScoreGauge';
-import ModelConsensus from './ModelConsensus';
-import ReasonCards from './ReasonCards';
 
 function formatAmount(amount) {
   const n = Number(amount);
@@ -17,178 +14,107 @@ function formatTime(iso) {
   return d.toLocaleString();
 }
 
-function Row({ label, value, mono = false }) {
+function formatRisk(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return '—';
+  return `${(n * 100).toFixed(1)}%`;
+}
+
+function Row({ label, value }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
       <div className="shrink-0 text-xs text-textSecondary">{label}</div>
-      <div className={`min-w-0 truncate text-right text-sm font-medium text-textPrimary tabular-nums ${mono ? 'font-mono' : ''}`}>{value}</div>
+      <div className="min-w-0 truncate text-right text-sm font-medium text-textPrimary tabular-nums">{value}</div>
     </div>
   );
 }
 
 function Section({ title, children }) {
   return (
-    <div className="border-t border-border/60 px-5 py-4">
+    <div className="border-t border-border/80 px-5 py-4">
       <div className="text-xs font-semibold uppercase tracking-[0.12em] text-textSecondary">{title}</div>
       <div className="mt-2">{children}</div>
     </div>
   );
 }
 
-function RiskBreakdownBars({ breakdown }) {
-  if (!breakdown) return null;
-  const bars = [
-    { label: 'Behavioral', value: breakdown.behavioral, color: '#6C47FF' },
-    { label: 'Temporal', value: breakdown.temporal, color: '#378ADD' },
-    { label: 'Network', value: breakdown.network, color: '#EF9F27' },
-    { label: 'Device', value: breakdown.device, color: '#E24B4A' },
-  ];
+function getModelConsensus(txn) {
+  const source = txn?.raw?.individual_scores || txn?.individual_scores || {};
+  const values = Object.values(source)
+    .map((v) => Number(v))
+    .filter((v) => Number.isFinite(v));
 
-  return (
-    <div className="grid grid-cols-2 gap-3 mt-3">
-      {bars.map((bar) => (
-        <div key={bar.label}>
-          <div className="flex items-center justify-between text-[11px] mb-1">
-            <span className="text-textSecondary">{bar.label}</span>
-            <span className="font-mono text-textPrimary">{(bar.value || 0).toFixed(0)}%</span>
-          </div>
-          <div className="h-1.5 rounded-full bg-bg-elevated/60 overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{ width: `${Math.min(bar.value || 0, 100)}%`, backgroundColor: bar.color }}
-            />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+  if (values.length < 2) {
+    return { label: 'Limited', spread: null };
+  }
+
+  const spread = Math.max(...values) - Math.min(...values);
+  if (spread <= 0.15) return { label: 'Strong', spread };
+  if (spread <= 0.32) return { label: 'Moderate', spread };
+  return { label: 'Weak', spread };
 }
 
-export default function TransactionDetailsPanel({ txn, onVerifyClick, onFeedback, feedbackBusy, onEscalate }) {
-  const scores = txn?.raw?.individual_scores || txn?.individual_scores || {};
-  const breakdown = txn?.raw?.risk_breakdown || txn?.risk_breakdown || null;
-  const npciCategory = txn?.raw?.npci_category || txn?.npci_category || null;
+export default function TransactionDetailsPanel({ txn, onVerifyClick, onFeedback, feedbackBusy }) {
+  const consensus = getModelConsensus(txn);
 
   return (
     <aside className="panel fade-in stagger-1">
       <div className="flex items-center justify-between gap-4 px-5 py-4">
         <div>
           <div className="panel-title">Transaction Intelligence</div>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="font-mono text-[11px] text-textSecondary">{txn?.transaction_id || 'Select a transaction'}</span>
-            {txn?.transaction_id && (
-              <button
-                type="button"
-                onClick={() => navigator.clipboard?.writeText(txn.transaction_id)}
-                className="text-textMuted hover:text-accent transition"
-                title="Copy ID"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                </svg>
-              </button>
-            )}
-          </div>
+          <div className="mt-1 font-mono text-[11px] text-textSecondary">{txn?.transaction_id || 'Select a transaction'}</div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {txn && isVerify(txn) ? (
-            <button
-              type="button"
-              onClick={onVerifyClick}
-              className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white transition hover:bg-accent-light"
-            >
-              Verify
-            </button>
-          ) : null}
-        </div>
+        {txn && isVerify(txn) ? (
+          <button
+            type="button"
+            onClick={onVerifyClick}
+            className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white transition hover:bg-primary/90"
+          >
+            Verify
+          </button>
+        ) : null}
       </div>
 
       {!txn ? (
-        <div className="border-t border-border/60 px-5 py-8 text-sm text-textSecondary">
+        <div className="border-t border-border/80 px-5 py-8 text-sm text-textSecondary">
           Click a row in the table to load details.
         </div>
       ) : (
         <>
-          {/* Fraud Score Gauge */}
-          <div className="border-t border-border/60 px-5 py-4 flex justify-center">
-            <FraudScoreGauge score={Number(txn.fraud_score) || 0} size={150} />
-          </div>
-
-          {/* Model Consensus */}
-          <Section title="Model Scores">
-            <ModelConsensus
-              individualScores={scores}
-              ensembleScore={Number(txn.fraud_score) || 0}
-            />
-          </Section>
-
-          {/* Risk Analysis with ReasonCards */}
-          <Section title="Risk Analysis">
-            <RiskBreakdownBars breakdown={breakdown} />
-            {npciCategory && (
-              <div className="mt-3 flex items-center gap-2">
-                <span className="text-[10px] font-semibold tracking-wider text-textMuted uppercase">NPCI</span>
-                <span className="text-xs text-accent font-medium">{npciCategory}</span>
-              </div>
-            )}
-
-            {/* Rich decision message + expandable reason cards */}
-            <div className="mt-4">
-              <ReasonCards reasons={txn.reasons || []} message={txn.message} />
-            </div>
-
-            {/* Geo Risk badge */}
-            {(txn?.raw?.geo_risk?.risk_level || txn?.geo_risk?.risk_level) && (txn?.raw?.geo_risk?.risk_level || txn?.geo_risk?.risk_level) !== 'LOW' && (
-              <div style={{
-                marginTop: 12, padding: '10px 12px', borderRadius: 8,
-                background: '#0D0E14',
-                borderLeft: '3px solid #EF9F27',
-                fontSize: 12,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                  <span>🌍</span>
-                  <span style={{ fontWeight: 600, color: '#EF9F27' }}>Geo Risk: {(txn?.raw?.geo_risk || txn?.geo_risk)?.risk_level}</span>
-                </div>
-                <div style={{ color: '#8B8FA3', fontSize: 11 }}>
-                  Region: {(txn?.raw?.geo_risk || txn?.geo_risk)?.region || 'Unknown'}
-                  {(txn?.raw?.geo_risk || txn?.geo_risk)?.risk_multiplier > 1 && ` (${(txn?.raw?.geo_risk || txn?.geo_risk)?.risk_multiplier}x risk)`}
-                </div>
-              </div>
-            )}
-
-            {/* VPA Risk badge */}
-            {(txn?.raw?.vpa_risk?.combined_vpa_risk || txn?.vpa_risk?.combined_vpa_risk) > 0.3 && (
-              <div style={{
-                marginTop: 8, padding: '10px 12px', borderRadius: 8,
-                background: '#0D0E14',
-                borderLeft: '3px solid #E24B4A',
-                fontSize: 12,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                  <span>🎭</span>
-                  <span style={{ fontWeight: 600, color: '#E24B4A' }}>VPA Risk Detected</span>
-                </div>
-                <div style={{ color: '#8B8FA3', fontSize: 11 }}>
-                  Combined VPA risk: {((txn?.raw?.vpa_risk || txn?.vpa_risk)?.combined_vpa_risk * 100).toFixed(0)}%
-                </div>
-              </div>
-            )}
-          </Section>
-
-          {/* Basic Info */}
-          <Section title="Transaction Info">
-            <div className="divide-y divide-border/40">
+          <Section title="Basic Info">
+            <div className="divide-y divide-border/80">
               <Row label="Time" value={formatTime(txn.timestamp)} />
-              <Row label="Amount" value={formatAmount(txn.amount)} mono />
-              <Row label="Sender" value={txn.sender_upi || '—'} />
+              <Row label="Amount" value={formatAmount(txn.amount)} />
               <Row label="Receiver" value={txn.receiver_upi || '—'} />
+              <Row label="Sender" value={txn.sender_upi || '—'} />
             </div>
           </Section>
 
-          {/* Decision + Actions */}
+          <Section title="Risk Analysis">
+            <div className="divide-y divide-border/80">
+              <Row label="Risk Score" value={formatRisk(txn.fraud_score)} />
+              <Row label="Risk Level" value={txn.risk_level || '—'} />
+              <Row
+                label="Model Consensus"
+                value={consensus.spread == null ? consensus.label : `${consensus.label} (${(consensus.spread * 100).toFixed(1)}%)`}
+              />
+            </div>
+            <div className="mt-3 text-xs text-textSecondary">Risk factors</div>
+            <ul className="mt-2 space-y-1 text-sm text-textPrimary">
+              {(Array.isArray(txn.reasons) ? txn.reasons : []).slice(0, 5).map((r, idx) => (
+                <li key={idx} className="rounded-md border border-border/70 bg-bg/40 px-2 py-1 text-sm">
+                  {r}
+                </li>
+              ))}
+              {(!txn.reasons || txn.reasons.length === 0) && (
+                <li className="text-textSecondary">No explanations available.</li>
+              )}
+            </ul>
+          </Section>
+
           <Section title="Decision">
-            <div className="divide-y divide-border/40">
+            <div className="divide-y divide-border/80">
               <Row label="Decision" value={txn.decision || '—'} />
               <Row label="Status" value={<StatusBadge txn={txn} />} />
             </div>
@@ -199,28 +125,19 @@ export default function TransactionDetailsPanel({ txn, onVerifyClick, onFeedback
                 type="button"
                 disabled={feedbackBusy}
                 onClick={() => onFeedback?.(txn, 'confirmed_fraud')}
-                className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger transition hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-lg border border-danger/30 bg-danger/15 px-3 py-2 text-xs font-semibold text-danger transition hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Confirm Fraud
+                Mark Confirmed Fraud
               </button>
               <button
                 type="button"
                 disabled={feedbackBusy}
                 onClick={() => onFeedback?.(txn, 'false_positive')}
-                className="rounded-lg border border-safe/30 bg-safe/10 px-3 py-2 text-xs font-semibold text-safe transition hover:bg-safe/20 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-lg border border-success/30 bg-success/15 px-3 py-2 text-xs font-semibold text-success transition hover:bg-success/20 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                False Positive
+                Mark False Positive
               </button>
             </div>
-
-            {/* Escalate to Case */}
-            <button
-              type="button"
-              onClick={() => onEscalate?.(txn)}
-              className="mt-2 w-full rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs font-semibold text-accent transition hover:bg-accent/20"
-            >
-              Escalate to Case
-            </button>
           </Section>
         </>
       )}
