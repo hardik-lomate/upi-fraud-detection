@@ -1,361 +1,304 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import AdminConsole from './AdminConsole';
-import BottomNav from './components/user/BottomNav';
-import { UserProvider, useUser } from './components/user/UserContext';
-import HomeScreen from './screens/HomeScreen';
-import PayScreen from './screens/PayScreen';
-import SecurityCheckScreen from './screens/SecurityCheckScreen';
-import PaymentSuccessScreen from './screens/PaymentSuccessScreen';
-import PaymentVerifyScreen from './screens/PaymentVerifyScreen';
-import PaymentBlockedScreen from './screens/PaymentBlockedScreen';
-import HistoryScreen from './screens/HistoryScreen';
-import SecurityProfileScreen from './screens/SecurityProfileScreen';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom';
+import { Activity, BarChart3, RefreshCw, ShieldAlert, Sparkles, Zap } from 'lucide-react';
+import DashboardPage from './pages/DashboardPage';
+import TransactionsPage from './pages/TransactionsPage';
+import AnalyticsPage from './pages/AnalyticsPage';
+import TransactionDetailModal from './components/dashboard/TransactionDetailModal';
 import {
-  fetchMySecurityScore,
-  fetchMyTransactions,
-  payTransaction,
-  reportFraud,
-  verifyBiometricWithMethod,
-} from './api/fraudApi';
+  fetchMetrics,
+  fetchTransactionDetail,
+  fetchTransactions,
+  mergeLatestTransactions,
+  runSimulation,
+} from './api/dashboardApi';
 
-const IMMERSIVE_SCREENS = new Set(['checking', 'success', 'verify', 'blocked']);
+const NAV_ITEMS = [
+  { to: '/', label: 'Dashboard' },
+  { to: '/transactions', label: 'Transaction Monitor' },
+  { to: '/analytics', label: 'Analytics' },
+];
 
-function upsertByTransaction(prev, nextItem) {
-  return [nextItem, ...prev.filter((row) => row.transaction_id !== nextItem.transaction_id)];
+function NavTab({ to, label }) {
+  return (
+    <NavLink
+      to={to}
+      end={to === '/'}
+      className={({ isActive }) =>
+        `rounded-lg px-3 py-2 text-sm font-semibold transition ${
+          isActive
+            ? 'bg-cyan-400/20 text-cyan-200 ring-1 ring-cyan-300/40'
+            : 'text-slate-300 hover:bg-slate-800/70 hover:text-slate-100'
+        }`
+      }
+    >
+      {label}
+    </NavLink>
+  );
 }
 
-function transactionFromResult(result) {
-  return {
-    transaction_id: result.transaction_id,
-    sender_upi: result.sender_upi,
-    receiver_upi: result.receiver_upi,
-    receiver_name: result.receiver_name,
-    amount: Number(result.amount || 0),
-    status: result.status,
-    decision: result.decision,
-    user_message: result.user_message,
-    user_reason: result.user_reason,
-    security_note: result.security_note,
-    fraud_pattern: result.fraud_pattern,
-    timestamp: result.timestamp,
-    receipt_id: result.receipt_id,
-    transaction_type: result.transaction_type || 'transfer',
-  };
-}
-
-function UserMode({ onOpenConsole }) {
-  const { currentUser, profiles, switchProfile, debitBalance } = useUser();
-
-  const [screen, setScreen] = useState('home');
-  const [payDraft, setPayDraft] = useState({ transaction_type: 'transfer' });
-  const [paymentPayload, setPaymentPayload] = useState(null);
-  const [paymentResult, setPaymentResult] = useState(null);
-
+function App() {
   const [transactions, setTransactions] = useState([]);
-  const [securityScore, setSecurityScore] = useState(null);
-  const [toast, setToast] = useState('');
+  const [metrics, setMetrics] = useState(null);
 
-  const refreshUserData = useCallback(async () => {
+  const [loadingTransactions, setLoadingTransactions] = useState(true);
+  const [loadingMetrics, setLoadingMetrics] = useState(true);
+  const [transactionsError, setTransactionsError] = useState('');
+  const [metricsError, setMetricsError] = useState('');
+
+  const [decisionFilter, setDecisionFilter] = useState('ALL');
+
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
+  const [selectedTransaction, setSelectedTransaction] = useState(null);
+
+  const [simulationLoading, setSimulationLoading] = useState(false);
+  const [simulationMessage, setSimulationMessage] = useState('');
+  const clearMessageTimerRef = useRef(null);
+
+  const pushMessage = useCallback((message) => {
+    setSimulationMessage(message);
+    if (clearMessageTimerRef.current) {
+      clearTimeout(clearMessageTimerRef.current);
+    }
+    clearMessageTimerRef.current = setTimeout(() => setSimulationMessage(''), 5200);
+  }, []);
+
+  const loadTransactions = useCallback(async () => {
+    setLoadingTransactions(true);
+    setTransactionsError('');
+
     try {
-      const [txnData, scoreData] = await Promise.all([
-        fetchMyTransactions(currentUser.upi, 50),
-        fetchMySecurityScore(currentUser.upi),
-      ]);
-      setTransactions(Array.isArray(txnData?.transactions) ? txnData.transactions : []);
-      setSecurityScore(scoreData || null);
-    } catch {
-      setToast('Could not refresh account data. Showing latest available info.');
+      const rows = await fetchTransactions(180);
+      setTransactions(rows);
+    } catch (error) {
+      const fallback = String(error?.response?.data?.detail || error?.message || 'Unable to fetch transactions.');
+      setTransactionsError(fallback);
+    } finally {
+      setLoadingTransactions(false);
     }
-  }, [currentUser.upi]);
+  }, []);
 
-  useEffect(() => {
-    refreshUserData();
-  }, [refreshUserData]);
+  const loadMetrics = useCallback(async () => {
+    setLoadingMetrics(true);
+    setMetricsError('');
 
-  useEffect(() => {
-    setScreen('home');
-    setPayDraft({ transaction_type: 'transfer' });
-    setPaymentPayload(null);
-    setPaymentResult(null);
-  }, [currentUser.upi]);
-
-  useEffect(() => {
-    if (!toast) return undefined;
-    const timer = setTimeout(() => setToast(''), 2800);
-    return () => clearTimeout(timer);
-  }, [toast]);
-
-  const navScreen = useMemo(() => {
-    if (screen === 'history') return 'history';
-    if (screen === 'security') return 'security';
-    if (screen === 'pay' || screen === 'checking' || screen === 'verify' || screen === 'success' || screen === 'blocked') {
-      return 'pay';
+    try {
+      const data = await fetchMetrics();
+      setMetrics(data);
+    } catch (error) {
+      const fallback = String(error?.response?.data?.detail || error?.message || 'Unable to fetch metrics.');
+      setMetricsError(fallback);
+    } finally {
+      setLoadingMetrics(false);
     }
-    return 'home';
-  }, [screen]);
+  }, []);
 
-  const historySummary = useMemo(() => {
-    const blockedCount = transactions.filter((txn) => txn.status === 'BLOCKED').length;
-    return {
-      protectedCount: transactions.length,
-      protectedAmount: Number(securityScore?.protected_amount || 0),
-      blockedCount,
+  useEffect(() => {
+    loadTransactions();
+    loadMetrics();
+
+    const timer = setInterval(() => {
+      loadTransactions();
+    }, 12000);
+
+    return () => {
+      clearInterval(timer);
+      if (clearMessageTimerRef.current) clearTimeout(clearMessageTimerRef.current);
     };
-  }, [transactions, securityScore]);
+  }, [loadTransactions, loadMetrics]);
 
-  const runPayCheck = useCallback(async (payload) => {
-    return payTransaction(payload);
-  }, []);
+  const handleRefresh = useCallback(() => {
+    loadTransactions();
+    loadMetrics();
+  }, [loadTransactions, loadMetrics]);
 
-  const handleCheckComplete = useCallback(
-    (response) => {
-      const result = {
-        ...response,
-        sender_upi: currentUser.upi,
-      };
-      setPaymentResult(result);
-      setTransactions((prev) => upsertByTransaction(prev, transactionFromResult(result)));
+  const handleOpenTransaction = useCallback(async (transaction) => {
+    setDetailOpen(true);
+    setDetailLoading(true);
+    setDetailError('');
+    setSelectedTransaction(transaction);
 
-      if (result.decision === 'ALLOW') {
-        debitBalance(Number(result.amount || 0));
-        setScreen('success');
-      } else if (result.decision === 'VERIFY') {
-        setScreen('verify');
-      } else {
-        setScreen('blocked');
-      }
-
-      refreshUserData();
-    },
-    [currentUser.upi, debitBalance, refreshUserData]
-  );
-
-  const handleVerifyRequest = useCallback(async (method) => {
-    const mappedMethod = method === 'pin' ? 'fingerprint' : method;
-    return verifyBiometricWithMethod(paymentResult?.transaction_id, mappedMethod);
-  }, [paymentResult?.transaction_id]);
-
-  const handleVerifyResolved = useCallback(
-    ({ outcome, verification }) => {
-      if (outcome === 'success') {
-        const next = {
-          ...paymentResult,
-          status: 'COMPLETED',
-          decision: 'ALLOW',
-          user_message: verification?.message || paymentResult?.user_message,
-          security_note: 'Verification completed successfully. Payment sent securely.',
-        };
-        setPaymentResult(next);
-        setTransactions((prev) => upsertByTransaction(prev, transactionFromResult(next)));
-        debitBalance(Number(next.amount || 0));
-        setScreen('success');
-      } else {
-        const next = {
-          ...paymentResult,
-          status: 'BLOCKED',
-          decision: 'BLOCK',
-          user_reason: verification?.message || paymentResult?.user_reason,
-          user_message: 'Your money is safe. Payment stopped for your protection.',
-        };
-        setPaymentResult(next);
-        setTransactions((prev) => upsertByTransaction(prev, transactionFromResult(next)));
-        setScreen('blocked');
-      }
-      refreshUserData();
-    },
-    [debitBalance, paymentResult, refreshUserData]
-  );
-
-  const openPay = useCallback((prefill = {}) => {
-    setPayDraft((prev) => ({
-      ...prev,
-      ...prefill,
-    }));
-    setScreen('pay');
-  }, []);
-
-  const runDemoScenario = useCallback((scenario) => {
-    setPayDraft({
-      ...scenario.payload,
-      note: `Demo: ${scenario.label}`,
-    });
-    setScreen('pay');
-  }, []);
-
-  const submitPayForm = useCallback(
-    (payload) => {
-      const outgoing = {
-        sender_upi: currentUser.upi,
-        receiver_upi: payload.receiver_upi,
-        amount: Number(payload.amount || 0),
-        transaction_type: payload.transaction_type || 'transfer',
-        note: payload.note || '',
-        sender_device_id: payload.sender_device_id || `WEB_${currentUser.initials}_001`,
-      };
-      setPaymentPayload(outgoing);
-      setScreen('checking');
-    },
-    [currentUser.initials, currentUser.upi]
-  );
-
-  const submitAppeal = useCallback(async ({ reason, phone, transactionId }) => {
-    setToast(`Appeal submitted for ${transactionId}. Support callback on ${phone}.`);
-    if (!reason) return;
-  }, []);
-
-  const submitFraudReport = useCallback(
-    async (txnOrResult) => {
-      const transactionId = txnOrResult?.transaction_id || paymentResult?.transaction_id;
-      if (!transactionId) return;
-      try {
-        await reportFraud(transactionId, currentUser.upi, 'User reported this transaction as unauthorized.');
-        setToast('Report submitted. Support ticket created and account secured.');
-      } catch {
-        setToast('Could not submit report right now. Please call 1930.');
-      }
-      refreshUserData();
-    },
-    [currentUser.upi, paymentResult?.transaction_id, refreshUserData]
-  );
-
-  const shareReceipt = useCallback(async () => {
-    if (!paymentResult) return;
-    const text = `ShieldPay Receipt\nID: ${paymentResult.receipt_id}\nTo: ${paymentResult.receiver_upi}\nAmount: Rs.${paymentResult.amount}`;
     try {
-      if (navigator.share) {
-        await navigator.share({ title: 'ShieldPay Receipt', text });
-      } else {
-        await navigator.clipboard.writeText(text);
+      const detail = await fetchTransactionDetail(transaction.transaction_id, transaction);
+      if (detail) {
+        setSelectedTransaction(detail);
       }
-      setToast('Receipt ready to share.');
-    } catch {
-      setToast('Could not share receipt now.');
+    } catch (error) {
+      setDetailError(String(error?.message || 'Unable to load transaction detail.'));
+    } finally {
+      setDetailLoading(false);
     }
-  }, [paymentResult]);
+  }, []);
 
-  const isImmersive = IMMERSIVE_SCREENS.has(screen);
+  const handleRunSimulation = useCallback(async () => {
+    setSimulationLoading(true);
+    setTransactionsError('');
 
-  let content = null;
-  if (screen === 'home') {
-    content = (
-      <HomeScreen
-        profile={currentUser}
-        profiles={profiles}
-        transactions={transactions}
-        securitySummary={securityScore}
-        onOpenPay={openPay}
-        onOpenHistory={() => setScreen('history')}
-        onOpenSecurity={() => setScreen('security')}
-        onRunDemo={runDemoScenario}
-        onSelectProfile={switchProfile}
-      />
-    );
-  } else if (screen === 'pay') {
-    content = (
-      <PayScreen
-        draft={payDraft}
-        onBack={() => setScreen('home')}
-        onSubmit={submitPayForm}
-      />
-    );
-  } else if (screen === 'checking') {
-    content = (
-      <SecurityCheckScreen
-        paymentPayload={paymentPayload}
-        onRunCheck={runPayCheck}
-        onComplete={handleCheckComplete}
-      />
-    );
-  } else if (screen === 'success') {
-    content = (
-      <PaymentSuccessScreen
-        result={paymentResult}
-        onDone={() => {
-          setScreen('home');
-          refreshUserData();
-        }}
-        onShare={shareReceipt}
-        onPayAgain={() => openPay({ receiver_upi: paymentResult?.receiver_upi, transaction_type: paymentResult?.transaction_type })}
-      />
-    );
-  } else if (screen === 'verify') {
-    content = (
-      <PaymentVerifyScreen
-        result={paymentResult}
-        onBack={() => setScreen('pay')}
-        onVerify={handleVerifyRequest}
-        onResolved={handleVerifyResolved}
-      />
-    );
-  } else if (screen === 'blocked') {
-    content = (
-      <PaymentBlockedScreen
-        result={paymentResult}
-        onHome={() => setScreen('home')}
-        onAppeal={submitAppeal}
-        onReport={() => submitFraudReport(paymentResult)}
-      />
-    );
-  } else if (screen === 'history') {
-    content = (
-      <HistoryScreen
-        transactions={transactions}
-        summary={historySummary}
-        onReportFraud={submitFraudReport}
-      />
-    );
-  } else if (screen === 'security') {
-    content = <SecurityProfileScreen scoreData={securityScore} />;
-  }
+    try {
+      const result = await runSimulation();
+      const rows = Array.isArray(result?.transactions) ? result.transactions : [];
+      setTransactions((prev) => mergeLatestTransactions(prev, rows, 260));
+      pushMessage(`Simulation complete: ${rows.length} transactions from ${result?.source || 'fallback'}.`);
+    } catch (error) {
+      const fallback = String(error?.response?.data?.detail || error?.message || 'Simulation failed.');
+      setTransactionsError(fallback);
+    } finally {
+      setSimulationLoading(false);
+    }
+  }, [pushMessage]);
+
+  const headlineStats = useMemo(() => {
+    const total = transactions.length;
+    const block = transactions.filter((txn) => txn.decision === 'BLOCK').length;
+    const step = transactions.filter((txn) => txn.decision === 'STEP-UP').length;
+    const avgRisk =
+      total > 0 ? transactions.reduce((acc, txn) => acc + Number(txn.risk_score || 0), 0) / total : 0;
+
+    return {
+      total,
+      block,
+      step,
+      avgRisk,
+    };
+  }, [transactions]);
 
   return (
-    <div className="user-mode-shell">
-      <button type="button" className="console-toggle" onClick={onOpenConsole}>
-        Security Console
-      </button>
+    <BrowserRouter>
+      <div className="min-h-screen bg-app px-4 pb-8 pt-5 text-slate-100 md:px-6 lg:px-10">
+        <div className="mx-auto max-w-7xl space-y-6">
+          <header className="rounded-2xl border border-slate-700/60 bg-slate-900/80 p-4 shadow-[0_14px_40px_rgba(2,6,23,0.5)]">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="space-y-2">
+                <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-200">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Demo Ready Fraud Intelligence
+                </div>
+                <h1 className="text-2xl font-bold tracking-tight text-slate-50 md:text-3xl">
+                  UPI Fraud Detection Control Center
+                </h1>
+                <p className="text-sm text-slate-400">
+                  Real-time visibility into risk scoring, decisioning, and model intelligence.
+                </p>
+              </div>
 
-      <main className={`mobile-frame ${isImmersive ? 'immersive' : ''}`}>
-        {content}
-      </main>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleRefresh}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-800/80 px-3 py-2 text-sm font-medium text-slate-200 transition hover:border-slate-400 hover:text-white"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  disabled={simulationLoading}
+                  onClick={handleRunSimulation}
+                  className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/50 bg-emerald-500/15 px-3 py-2 text-sm font-semibold text-emerald-200 transition hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Zap className="h-4 w-4" />
+                  {simulationLoading ? 'Running...' : 'Run Simulation'}
+                </button>
+              </div>
+            </div>
 
-      {!isImmersive ? (
-        <BottomNav
-          active={navScreen}
-          onNavigate={(target) => setScreen(target)}
-          onConsole={onOpenConsole}
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/60 p-3">
+                <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Live Volume</p>
+                <p className="mt-1 text-lg font-semibold text-slate-100">{headlineStats.total}</p>
+              </div>
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/60 p-3">
+                <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Fraud Pressure</p>
+                <p className="mt-1 inline-flex items-center gap-2 text-lg font-semibold text-rose-200">
+                  <ShieldAlert className="h-4 w-4" />
+                  {headlineStats.block + headlineStats.step}
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/60 p-3">
+                <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Average Risk</p>
+                <p className="mt-1 inline-flex items-center gap-2 text-lg font-semibold text-amber-200">
+                  <Activity className="h-4 w-4" />
+                  {(headlineStats.avgRisk * 100).toFixed(1)}%
+                </p>
+              </div>
+            </div>
+
+            {simulationMessage ? (
+              <div className="mt-4 rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-100">
+                {simulationMessage}
+              </div>
+            ) : null}
+            {metricsError ? (
+              <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                Metrics endpoint notice: {metricsError}
+              </div>
+            ) : null}
+          </header>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-700/60 bg-slate-900/70 p-2">
+            <div className="flex flex-wrap items-center gap-1">
+              {NAV_ITEMS.map((item) => (
+                <NavTab key={item.to} to={item.to} label={item.label} />
+              ))}
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-lg bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
+              <BarChart3 className="h-3.5 w-3.5" />
+              {loadingMetrics ? 'Loading model metrics...' : `Metric source: ${metrics?._source || 'N/A'}`}
+            </div>
+          </div>
+
+          <main>
+            <Routes>
+              <Route
+                path="/"
+                element={
+                  <DashboardPage
+                    transactions={transactions}
+                    metrics={metrics}
+                    loading={loadingTransactions}
+                    error={transactionsError}
+                    onSelectTransaction={handleOpenTransaction}
+                    onRefresh={handleRefresh}
+                  />
+                }
+              />
+              <Route
+                path="/transactions"
+                element={
+                  <TransactionsPage
+                    transactions={transactions}
+                    loading={loadingTransactions}
+                    error={transactionsError}
+                    filter={decisionFilter}
+                    onFilterChange={setDecisionFilter}
+                    onSelectTransaction={handleOpenTransaction}
+                  />
+                }
+              />
+              <Route
+                path="/analytics"
+                element={<AnalyticsPage transactions={transactions} metrics={metrics} />}
+              />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </main>
+        </div>
+
+        <TransactionDetailModal
+          open={detailOpen}
+          transaction={selectedTransaction}
+          loading={detailLoading}
+          error={detailError}
+          onClose={() => {
+            setDetailOpen(false);
+            setDetailError('');
+          }}
         />
-      ) : null}
-
-      {toast ? <div className="toast-banner">{toast}</div> : null}
-    </div>
-  );
-}
-
-function AppRoot() {
-  const [mode, setMode] = useState('user');
-
-  if (mode === 'admin') {
-    return (
-      <div className="app-mode mode-admin">
-        <button type="button" className="console-toggle in-admin" onClick={() => setMode('user')}>
-          ShieldPay
-        </button>
-        <AdminConsole />
       </div>
-    );
-  }
-
-  return (
-    <div className="app-mode mode-user">
-      <UserMode onOpenConsole={() => setMode('admin')} />
-    </div>
+    </BrowserRouter>
   );
 }
 
-export default function App() {
-  return (
-    <UserProvider>
-      <AppRoot />
-    </UserProvider>
-  );
-}
+export default App;
