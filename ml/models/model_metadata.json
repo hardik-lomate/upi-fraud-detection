@@ -1,5 +1,5 @@
 {
-  "trained_at": "2026-04-07T22:02:17.799072Z",
+  "trained_at": "2026-04-08T07:05:06.505112Z",
   "dataset_path": "data\\fraud_dataset.csv",
   "rows": 6000,
   "feature_count": 32,
