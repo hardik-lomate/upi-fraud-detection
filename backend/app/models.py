@@ -1,4 +1,4 @@
-"""Pydantic models — enriched with descriptions and examples for OpenAPI docs."""
+"""Pydantic models - enriched with descriptions and examples for OpenAPI docs."""
 
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
@@ -12,7 +12,7 @@ class TransactionRequest(BaseModel):
     transaction_id: Optional[str] = Field(None, description="Optional ID. Auto-generated if omitted.")
     sender_upi: str = Field(..., min_length=3, description="Sender's UPI ID", examples=["user123@upi"])
     receiver_upi: str = Field(..., min_length=3, description="Receiver's UPI ID", examples=["merchant456@upi"])
-    amount: float = Field(..., gt=0, le=500000, description="Transaction amount in INR (₹1 to ₹5,00,000)")
+    amount: float = Field(..., gt=0, le=500000, description="Transaction amount in INR (Rs.1 to Rs.5,00,000)")
     timestamp: Optional[str] = Field(None, description="ISO 8601 timestamp. Auto-set to now if omitted.")
     sender_device_id: Optional[str] = Field(None, min_length=1, description="Device fingerprint (auto-generated if omitted)", examples=["DEV_ABC123"])
     sender_ip: Optional[str] = Field(None, description="Sender's IP address for geo-analysis")
@@ -67,7 +67,7 @@ class PredictionResponse(BaseModel):
     """Full prediction result with ML scores, rules, SHAP explanations, and risk breakdown."""
     transaction_id: str
     fraud_score: float = Field(..., ge=0.0, le=1.0,
-        description="Ensemble fraud probability. XGBoost(45%) + LightGBM(35%) + IsoForest(20%)")
+        description="Ensemble fraud probability from deployed model stack")
     risk_score: float = Field(..., ge=0.0, le=1.0, description="Alias of fraud_score for lock-check response format")
     decision: str = Field(..., description="ALLOW, VERIFY, or BLOCK")
     risk_level: str = Field(..., description="LOW, MEDIUM, or HIGH")
@@ -81,6 +81,7 @@ class PredictionResponse(BaseModel):
     device_anomalies: list[DeviceAnomaly] = Field(default=[], description="Device/geo anomalies detected")
     graph_info: Optional[GraphInfo] = Field(None, description="Network analysis results")
     risk_breakdown: Optional[RiskBreakdown] = Field(None, description="Multi-dimensional risk scores")
+    advanced_signals: dict = Field(default={}, description="Explicit drift/pattern detection signals")
     model_version: str = Field("2.0.0", description="Model version used for this prediction")
     status: str = Field("ALLOWED", description="Simplified state: ALLOWED, BLOCKED, PENDING")
     timestamp: Optional[str] = Field(None, description="ISO 8601 timestamp used for scoring")
@@ -121,7 +122,7 @@ class TokenResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    """Analyst feedback for a specific transaction — feeds into retraining pipeline."""
+    """Analyst feedback for a specific transaction - feeds into retraining pipeline."""
     transaction_id: str = Field(..., description="Transaction to label")
     analyst_verdict: Literal["confirmed_fraud", "false_positive", "true_negative"] = Field(
         ..., description="Analyst's assessment"

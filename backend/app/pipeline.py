@@ -25,6 +25,9 @@ from feature_contract import (
 )
 
 from .feature_columns import get_feature_columns, validate_feature_dict
+from .behavior_drift import compute_user_behavior_drift
+from .pattern_detector import detect_fraud_patterns
+from .history_store import get_sender_history
 
 
 @dataclass
@@ -37,6 +40,7 @@ class PipelineContext:
     # Features
     features: dict = field(default_factory=dict)
     feature_summary: dict = field(default_factory=dict)
+    advanced_signals: dict = field(default_factory=dict)
 
     # Rules
     rules_triggered: list = field(default_factory=list)
@@ -233,6 +237,120 @@ def step_behavior_analysis(ctx: PipelineContext, behavior_fn) -> PipelineContext
         ctx.errors.append(f"Behavior analysis failed: {e}")
     return ctx
 
+
+
+def _history_rows_for_patterns(sender_upi: str, history: dict, current_txn: dict, fallback_ts: str) -> list[dict]:
+    rows: list[dict] = []
+    for item in history.get("transactions", []):
+        try:
+            ts, amt, dev, recv = item
+            rows.append(
+                {
+                    "sender_upi": sender_upi,
+                    "receiver_upi": str(recv or "").strip().lower(),
+                    "amount": float(amt or 0.0),
+                    "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                    "sender_device_id": str(dev or ""),
+                }
+            )
+        except Exception:
+            continue
+
+    rows.append(
+        {
+            "sender_upi": sender_upi,
+            "receiver_upi": str(current_txn.get("receiver_upi") or "").strip().lower(),
+            "amount": float(current_txn.get("amount") or 0.0),
+            "timestamp": str(current_txn.get("timestamp") or fallback_ts or datetime.utcnow().isoformat()),
+            "sender_device_id": str(current_txn.get("sender_device_id") or ""),
+        }
+    )
+    return rows[-60:]
+
+
+def step_advanced_signals(ctx: PipelineContext) -> PipelineContext:
+    sender = str(ctx.raw_txn.get("sender_upi") or "").strip().lower()
+    if not sender:
+        ctx.processing_steps.append("advanced_signals")
+        return ctx
+
+    drift_payload = {}
+    pattern_hits = []
+    history = {}
+
+    try:
+        drift_payload = compute_user_behavior_drift(sender) or {}
+    except Exception:
+        drift_payload = {}
+
+    try:
+        history = get_sender_history(sender) or {}
+        rows = _history_rows_for_patterns(sender, history, ctx.raw_txn, ctx.timestamp)
+        pattern_hits = detect_fraud_patterns(rows) if rows else []
+    except Exception:
+        history = {}
+        pattern_hits = []
+
+    drift_score = float(drift_payload.get("drift_score", 0.0) or 0.0)
+    pattern_score = min(1.0, len(pattern_hits) / 3.0)
+    current_receiver = str(ctx.raw_txn.get("receiver_upi") or "").strip().lower()
+    recent_receivers = []
+    for item in (history.get("transactions", []) or [])[-4:]:
+        try:
+            recent_receivers.append(str(item[3] or "").strip().lower())
+        except Exception:
+            continue
+
+    consecutive_same_receiver = int(
+        bool(current_receiver)
+        and len(recent_receivers) >= 3
+        and all(r == current_receiver for r in recent_receivers[-3:])
+    )
+
+    risky_beneficiary_pattern = int(
+        any(
+            str(p.get("name", "")).upper() == "SAME_RECEIVER_MULTI_SENDER"
+            and bool(p.get("matched"))
+            for p in pattern_hits
+        )
+    )
+    transaction_burst = int(
+        any(
+            str(p.get("name", "")).upper() in {"ROUND_AMOUNT_BURST", "VELOCITY_RAMP"}
+            and bool(p.get("matched"))
+            for p in pattern_hits
+        )
+    )
+
+    ctx.advanced_signals = {
+        "drift_score": round(drift_score, 4),
+        "pattern_score": round(pattern_score, 4),
+        "risky_beneficiary_pattern": risky_beneficiary_pattern,
+        "transaction_burst": transaction_burst,
+        "consecutive_same_receiver": consecutive_same_receiver,
+        "matched_patterns": list(pattern_hits),
+    }
+
+    ctx.feature_summary["advanced_signals"] = {
+        "drift_score": round(drift_score, 4),
+        "pattern_score": round(pattern_score, 4),
+        "risky_beneficiary_pattern": risky_beneficiary_pattern,
+        "transaction_burst": transaction_burst,
+        "consecutive_same_receiver": consecutive_same_receiver,
+    }
+
+    if drift_score >= 0.6 and "User behavior drift is unusually high" not in ctx.behavior_reasons:
+        ctx.behavior_reasons.append("User behavior drift is unusually high")
+    if risky_beneficiary_pattern and "Receiver pattern resembles mule aggregation" not in ctx.behavior_reasons:
+        ctx.behavior_reasons.append("Receiver pattern resembles mule aggregation")
+    if transaction_burst and "Recent transaction burst pattern detected" not in ctx.behavior_reasons:
+        ctx.behavior_reasons.append("Recent transaction burst pattern detected")
+    if consecutive_same_receiver and "Repeated transfers to same receiver in short window" not in ctx.behavior_reasons:
+        ctx.behavior_reasons.append("Repeated transfers to same receiver in short window")
+
+
+    ctx.processing_steps.append("advanced_signals")
+    return ctx
 
 def step_device_check(ctx: PipelineContext, check_fn, update_fn, sender_history) -> PipelineContext:
     try:
@@ -506,6 +624,7 @@ def run_pipeline(
     ctx = step_ml_predict(ctx, predict_fn)
     ctx = step_device_check(ctx, check_device_fn, update_device_fn, sender_history)
     ctx = step_behavior_analysis(ctx, behavior_fn)
+    ctx = step_advanced_signals(ctx)
     ctx = step_graph_analysis(ctx, graph, graph_score_fn=graph_score_fn)
     ctx = step_risk_scoring(ctx, rules_score_fn, combine_risk_fn)
     ctx = step_decide(ctx)

@@ -15,7 +15,7 @@ Users see:
 
 ## Technical Depth Points
 - 32-feature behavioral + contextual model
-- Ensemble inference: LightGBM + XGBoost + CatBoost + IsolationForest
+- Ensemble inference: LightGBM + XGBoost
 - SHAP explainability for transparent risk rationale
 - Pre-payment interception flow with confirm/cancel hooks
 - Geo-impossibility checks (distance vs time)

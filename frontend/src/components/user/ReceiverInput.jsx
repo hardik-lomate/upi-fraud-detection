@@ -9,10 +9,10 @@ const FREQUENT_CONTACTS = [
   { name: 'Office Rent', upi: 'landlord@ybl', color: '#059669' },
 ];
 
-const DEMO_FRAUD_CONTACTS = [
-  { name: 'Test Fraud', upi: 'mule_a_collect@ybl', color: '#E24B4A', note: 'Triggers BLOCK' },
+const HIGH_RISK_CONTACTS = [
+  { name: 'Known Mule', upi: 'mule_a_collect@ybl', color: '#E24B4A', note: 'High-risk account' },
   { name: 'KYC Scam', upi: 'npci.helpdesk.kyc@paytm', color: '#E24B4A', note: 'Govt impersonation block' },
-  { name: 'Verify Test', upi: 'offshore_xk9f2@ybl', color: '#F39C12', note: 'Triggers VERIFY/BLOCK' },
+  { name: 'Offshore Risk', upi: 'offshore_xk9f2@ybl', color: '#F39C12', note: 'Often flagged for review/block' },
 ];
 
 function ContactChip({ contact, danger = false, onSelect }) {
@@ -77,9 +77,9 @@ export default function ReceiverInput({ value, onChange, receiverInfo, onLookup 
       </div>
 
       <div className="contacts-block">
-        <div className="contacts-title">Demo Fraud Contacts</div>
+        <div className="contacts-title">High-Risk Contacts</div>
         <div className="contacts-scroll">
-          {DEMO_FRAUD_CONTACTS.map((contact) => (
+          {HIGH_RISK_CONTACTS.map((contact) => (
             <ContactChip key={contact.upi} contact={contact} danger onSelect={onChange} />
           ))}
         </div>

@@ -22,9 +22,9 @@ export default function CasesPanel({ onCaseClick }) {
     } catch {
       // Demo data
       setCases([
-        { id: 1, txn_id: 'TXN_demo_001', status: 'OPEN', assigned_to: 'Analyst A', notes: 'Suspicious velocity pattern', created_at: new Date().toISOString(), resolved_at: null },
-        { id: 2, txn_id: 'TXN_demo_002', status: 'UNDER_REVIEW', assigned_to: 'Analyst B', notes: 'Mule account flagged', created_at: new Date().toISOString(), resolved_at: null },
-        { id: 3, txn_id: 'TXN_demo_003', status: 'CLOSED_FRAUD', assigned_to: 'Analyst A', notes: 'Confirmed fraud, account frozen', created_at: new Date().toISOString(), resolved_at: new Date().toISOString() },
+        { id: 1, txn_id: 'TXN_sample_001', status: 'OPEN', assigned_to: 'Analyst A', notes: 'Suspicious velocity pattern', created_at: new Date().toISOString(), resolved_at: null },
+        { id: 2, txn_id: 'TXN_sample_002', status: 'UNDER_REVIEW', assigned_to: 'Analyst B', notes: 'Mule account flagged', created_at: new Date().toISOString(), resolved_at: null },
+        { id: 3, txn_id: 'TXN_sample_003', status: 'CLOSED_FRAUD', assigned_to: 'Analyst A', notes: 'Confirmed fraud, account frozen', created_at: new Date().toISOString(), resolved_at: new Date().toISOString() },
       ]);
     } finally {
       setLoading(false);

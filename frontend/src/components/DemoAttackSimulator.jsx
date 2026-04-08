@@ -124,7 +124,7 @@ export default function DemoAttackSimulator({ onTransactionResult }) {
         <div>
           <div className="panel-title flex items-center gap-2">
             <span className="text-lg">🎯</span>
-            Live Attack Simulator
+            Fraud Scenario Simulator
           </div>
           <div className="mt-1 text-xs text-textSecondary">Watch the system catch real fraud patterns in real-time</div>
         </div>

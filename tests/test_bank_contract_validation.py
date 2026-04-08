@@ -171,6 +171,7 @@ def test_bank_pipeline_linear_order_and_component_usage():
         "ml_predict",
         "device_check",
         "behavior_analysis",
+        "advanced_signals",
         "graph_analysis",
         "risk_scoring",
         "decide",

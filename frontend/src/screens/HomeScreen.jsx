@@ -3,7 +3,7 @@ import BalanceCard from '../components/user/BalanceCard';
 import TransactionItem from '../components/user/TransactionItem';
 import { firstName, greetingByTime } from '../utils/format';
 
-const DEMO_SCENARIOS = [
+const RISK_SCENARIOS = [
   {
     id: 'normal_payment',
     label: 'Normal Payment',
@@ -176,16 +176,16 @@ export default function HomeScreen({
           {transactions.slice(0, 5).map((txn) => (
             <TransactionItem key={txn.transaction_id} txn={txn} />
           ))}
-          {transactions.length === 0 ? <p className="empty-copy">No transactions yet. Start with a demo payment.</p> : null}
+          {transactions.length === 0 ? <p className="empty-copy">No transactions yet. Start with a payment.</p> : null}
         </div>
       </section>
 
       <section className="home-section demo-section">
         <div className="section-title-row">
-          <h3>Try Demo Payments</h3>
+          <h3>Try Risk Scenarios</h3>
         </div>
         <div className="demo-grid">
-          {DEMO_SCENARIOS.map((scenario) => (
+          {RISK_SCENARIOS.map((scenario) => (
             <button
               type="button"
               key={scenario.id}

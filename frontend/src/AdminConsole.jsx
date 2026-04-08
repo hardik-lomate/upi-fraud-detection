@@ -477,7 +477,7 @@ export default function AdminConsole() {
             <section className="panel max-w-4xl px-5 py-5">
               <div className="panel-title">Runtime Configuration</div>
               <div className="mt-2 text-sm text-textSecondary">
-                v3.0.0 — 4-Model Ensemble (XGBoost + LightGBM + CatBoost + IsoForest) with online learning.
+                v4.0.0 — Dual-model ensemble (LightGBM + XGBoost) with online learning.
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <div className="rounded-xl border border-border/60 bg-bg-card/30 p-3">
@@ -499,7 +499,7 @@ export default function AdminConsole() {
                 <div className="rounded-xl border border-border/60 bg-bg-card/30 p-3 md:col-span-2">
                   <div className="text-xs uppercase tracking-[0.1em] text-textSecondary">Ensemble</div>
                   <div className="mt-1 text-sm text-textPrimary">
-                    XGBoost (30%) + LightGBM (30%) + CatBoost (25%) + IsolationForest (15%)
+                    LightGBM (55%) + XGBoost (45%)
                   </div>
                 </div>
               </div>

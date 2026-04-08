@@ -91,7 +91,7 @@ app = FastAPI(
     title="UPI Fraud Detection API",
     version="2.0.0",
     description=(
-        "Real-time UPI fraud detection with ensemble ML (XGBoost + LightGBM + IsoForest), "
+        "Real-time UPI fraud detection with ensemble ML (LightGBM + XGBoost), "
         "SHAP explainability, graph analysis, rules engine, and compliance audit logging."
     ),
 )
@@ -462,6 +462,7 @@ def _ctx_to_response(ctx) -> dict:
         "graph_info": {k: v for k, v in ctx.graph_info.items()
                         if k in GraphInfo.model_fields} if ctx.graph_info else None,
         "risk_breakdown": risk.model_dump(),
+        "advanced_signals": dict(getattr(ctx, "advanced_signals", {}) or {}),
         "user_warning": ctx.user_warning,
         "personalized_threshold": float(getattr(ctx, "personalized_threshold", THRESHOLD_BLOCK) or THRESHOLD_BLOCK),
         "model_version": ctx.model_version,
@@ -514,6 +515,7 @@ def _ctx_to_bank_response(ctx) -> dict:
         "ml_score": float(getattr(ctx, "ml_score", 0.0) or 0.0),
         "behavior_score": float(getattr(ctx, "behavior_score", 0.0) or 0.0),
         "graph_score": float(getattr(ctx, "graph_score", 0.0) or 0.0),
+        "advanced_signals": dict(getattr(ctx, "advanced_signals", {}) or {}),
         "risk_components": dict(getattr(ctx, "risk_components", {}) or {}),
         "key_features": {
             "amount": float((ctx.features or {}).get("amount", 0.0) or 0.0),
@@ -642,6 +644,7 @@ async def predict(
                     "device_anomalies": [],
                     "graph_info": None,
                     "risk_breakdown": None,
+                    "advanced_signals": {},
                     "model_version": MODEL_VERSION,
                 }
                 return _finish(resp, cache_hit=True)

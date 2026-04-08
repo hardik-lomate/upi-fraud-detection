@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom';
-import { Activity, BarChart3, RefreshCw, ShieldAlert, Sparkles, Zap } from 'lucide-react';
+import { Activity, BarChart3, RefreshCw, ShieldAlert, Zap } from 'lucide-react';
 import DashboardPage from './pages/DashboardPage';
 import TransactionsPage from './pages/TransactionsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
@@ -172,11 +172,11 @@ function App() {
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="space-y-2">
                 <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-200">
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Demo Ready Fraud Intelligence
+                  <Activity className="h-3.5 w-3.5" />
+                  Real-time UPI Fraud Intelligence
                 </div>
                 <h1 className="text-2xl font-bold tracking-tight text-slate-50 md:text-3xl">
-                  UPI Fraud Detection Control Center
+                  UPI Risk Intelligence Console
                 </h1>
                 <p className="text-sm text-slate-400">
                   Real-time visibility into risk scoring, decisioning, and model intelligence.
@@ -199,7 +199,7 @@ function App() {
                   className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/50 bg-emerald-500/15 px-3 py-2 text-sm font-semibold text-emerald-200 transition hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Zap className="h-4 w-4" />
-                  {simulationLoading ? 'Running...' : 'Run Simulation'}
+                  {simulationLoading ? 'Running...' : 'Simulate Attack'}
                 </button>
               </div>
             </div>

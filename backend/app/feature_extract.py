@@ -9,7 +9,7 @@ import logging
 import math
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-from feature_contract import TXN_TYPE_MAP, NIGHT_HOUR_CUTOFF, WEEKEND_DAY_CUTOFF
+from feature_contract import TXN_TYPE_MAP, NIGHT_HOUR_CUTOFF, WEEKEND_DAY_CUTOFF, FEATURE_COLUMNS
 from .history_store import get_sender_history, save_sender_history
 from .database import (
     count_recent_sender_transactions,
@@ -263,6 +263,9 @@ def extract_features(txn: dict) -> dict:
         "sender_fraud_score_history": sender_fraud_score_history,
         "receiver_fraud_flag_count": receiver_fraud_flag_count,
     }
+
+    for col in FEATURE_COLUMNS:
+        features.setdefault(col, 0.0)
 
     missing = validate_feature_dict(features)
     if missing:

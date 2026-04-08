@@ -108,7 +108,7 @@ export default function VerdictCard({ transaction, onExport }) {
         <span className="text-[10px] text-textMuted font-mono">
           {transaction.timestamp ? new Date(transaction.timestamp).toLocaleString() : '—'}
         </span>
-        <span className="text-[10px] text-textMuted">v3.0.0 Ensemble</span>
+        <span className="text-[10px] text-textMuted">v4.0.0 Dual-model Ensemble</span>
       </div>
     </div>
   );

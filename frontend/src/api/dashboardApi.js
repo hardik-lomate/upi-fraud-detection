@@ -93,7 +93,7 @@ function toTransactionRequest(txn) {
     amount: Number(txn.amount || 1),
     transaction_type: txn.transaction_type || 'transfer',
     timestamp: txn.timestamp || new Date().toISOString(),
-    sender_device_id: txn.sender_device_id || 'UI_DEMO_DEVICE',
+    sender_device_id: txn.sender_device_id || 'UI_FALLBACK_DEVICE',
     sender_location_lat: txn.sender_location_lat,
     sender_location_lon: txn.sender_location_lon,
   };
