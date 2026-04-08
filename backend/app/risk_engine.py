@@ -1,6 +1,7 @@
 """Unified risk scoring engine.
 
-risk_score = (rules_score * 0.3) + (ml_score * 0.4) + (behavior_score * 0.2) + (graph_score * 0.1)
+risk_score = weighted sum of normalized component signals:
+rules + ml + behavior + graph + anomaly(optional)
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ WEIGHT_JUSTIFICATION = {
     "ml": "Primary probabilistic signal from trained ensemble.",
     "behavior": "Behavioral drift/velocity anomaly signal.",
     "graph": "Graph-topology mule/network-risk signal.",
+    "anomaly": "Unsupervised anomaly score for unseen fraud patterns.",
 }
 
 DEFAULT_WEIGHT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "risk_weights.json"
@@ -100,6 +102,7 @@ def combine_risk_scores(
     ml_score: float,
     behavior_score: float,
     graph_score: float,
+    anomaly_score: float | None = None,
     weights: Dict[str, float] | None = None,
 ) -> dict:
     w = dict(RISK_COMPONENT_WEIGHTS)
@@ -109,9 +112,15 @@ def combine_risk_scores(
     if weights:
         w.update({k: float(v) for k, v in weights.items() if k in w})
 
+    use_anomaly = anomaly_score is not None
+    if not use_anomaly:
+        w.pop("anomaly", None)
+
     weight_sum = sum(float(v) for v in w.values())
     if weight_sum <= 0:
         w = dict(RISK_COMPONENT_WEIGHTS)
+        if not use_anomaly:
+            w.pop("anomaly", None)
         weight_sum = sum(float(v) for v in w.values())
 
     # Normalize weights in case callers provide non-1.0 totals.
@@ -123,12 +132,17 @@ def combine_risk_scores(
         "behavior_score": _clamp01(behavior_score),
         "graph_score": _clamp01(graph_score),
     }
+    if use_anomaly:
+        components_raw["anomaly_score"] = _clamp01(float(anomaly_score or 0.0))
 
-    support_peak = max(
+    support_items = [
         components_raw["rules_score"],
         components_raw["behavior_score"],
         components_raw["graph_score"],
-    )
+    ]
+    if use_anomaly:
+        support_items.append(components_raw["anomaly_score"])
+    support_peak = max(support_items)
     adjusted_ml, ml_adjustment = _moderate_isolated_ml_score(components_raw["ml_score"], support_peak)
 
     components = {
@@ -137,20 +151,17 @@ def combine_risk_scores(
         "behavior_score": components_raw["behavior_score"],
         "graph_score": components_raw["graph_score"],
     }
+    if use_anomaly:
+        components["anomaly_score"] = components_raw["anomaly_score"]
 
-    risk_score = (
-        (components["rules_score"] * w["rules"])
-        + (components["ml_score"] * w["ml"])
-        + (components["behavior_score"] * w["behavior"])
-        + (components["graph_score"] * w["graph"])
-    )
-
-    contributions = {
-        "rules": round(components["rules_score"] * w["rules"], 6),
-        "ml": round(components["ml_score"] * w["ml"], 6),
-        "behavior": round(components["behavior_score"] * w["behavior"], 6),
-        "graph": round(components["graph_score"] * w["graph"], 6),
-    }
+    risk_score = 0.0
+    contributions = {}
+    for signal, weight in w.items():
+        key = f"{signal}_score"
+        score = float(components.get(key, 0.0) or 0.0)
+        contribution = score * float(weight)
+        contributions[signal] = round(contribution, 6)
+        risk_score += contribution
 
     return {
         "risk_score": round(_clamp01(risk_score), 4),
@@ -163,6 +174,6 @@ def combine_risk_scores(
             "support_peak": round(support_peak, 6),
         },
         "weight_source": str(os.getenv("RISK_WEIGHTS_PATH", "").strip() or DEFAULT_WEIGHT_CONFIG_PATH),
-        "input_normalization": "All component scores are clamped to [0,1], isolated extreme ML tails are damped, and weights are normalized to sum=1.0",
-        "weight_justification": dict(WEIGHT_JUSTIFICATION),
+        "input_normalization": "All component scores are clamped to [0,1], isolated extreme ML tails are damped, and active weights are normalized to sum=1.0",
+        "weight_justification": {k: v for k, v in WEIGHT_JUSTIFICATION.items() if k in w},
     }

@@ -28,6 +28,7 @@ from .feature_columns import get_feature_columns, validate_feature_dict
 from .behavior_drift import compute_user_behavior_drift
 from .pattern_detector import detect_fraud_patterns
 from .history_store import get_sender_history
+from .nlg_summary import build_pipeline_reasoning
 
 
 @dataclass
@@ -50,6 +51,7 @@ class PipelineContext:
     # Model / component scores
     fraud_score: float = 0.0
     ml_score: float = 0.0
+    anomaly_score: Optional[float] = None
     behavior_score: float = 0.0
     graph_score: float = 0.0
     risk_score: float = 0.0
@@ -208,6 +210,13 @@ def step_ml_predict(ctx: PipelineContext, predict_fn) -> PipelineContext:
         ctx.risk_score = ctx.fraud_score
         ctx.individual_scores = dict(result.get("individual_scores", {}) or {})
         ctx.models_used = list(result.get("models_used", []) or [])
+        anomaly_raw = result.get("anomaly_score", None)
+        if anomaly_raw is None and "isolation_forest" in ctx.individual_scores:
+            anomaly_raw = ctx.individual_scores.get("isolation_forest", 0.0)
+        if anomaly_raw is None:
+            ctx.anomaly_score = None
+        else:
+            ctx.anomaly_score = max(0.0, min(1.0, float(anomaly_raw or 0.0)))
         ctx.processing_steps.append("ml_predict")
     except Exception as e:
         ctx.errors.append(f"ML prediction failed: {e}")
@@ -399,6 +408,7 @@ def step_graph_analysis(ctx: PipelineContext, graph, graph_score_fn=None) -> Pip
 
 
 def step_risk_scoring(ctx: PipelineContext, rules_score_fn, combine_risk_fn) -> PipelineContext:
+    """Step 7: Unified risk composition from rules, ML, behavior, graph, and anomaly."""
     if rules_score_fn is None or combine_risk_fn is None:
         ctx.processing_steps.append("risk_scoring")
         return ctx
@@ -410,6 +420,7 @@ def step_risk_scoring(ctx: PipelineContext, rules_score_fn, combine_risk_fn) -> 
             ml_score=ctx.ml_score,
             behavior_score=ctx.behavior_score,
             graph_score=ctx.graph_score,
+            anomaly_score=ctx.anomaly_score,
         )
         ctx.bank_risk_score = float(risk_payload.get("risk_score", 0.0) or 0.0)
         ctx.risk_components = {
@@ -524,6 +535,13 @@ def step_decide(ctx: PipelineContext) -> PipelineContext:
 
 
 def step_explain(ctx: PipelineContext, explain_fn, format_fn) -> PipelineContext:
+    """Step 5: Generate SHAP explanations."""
+    rule_reasons = [
+        str(getattr(r, "reason", "") or "").strip()
+        for r in (ctx.rules_triggered or [])
+        if str(getattr(r, "reason", "") or "").strip()
+    ]
+
     try:
         feature_columns = get_feature_columns()
         explanations = explain_fn(ctx.features, feature_columns, top_n=8)
@@ -533,10 +551,37 @@ def step_explain(ctx: PipelineContext, explain_fn, format_fn) -> PipelineContext
         for reason in [*(shap_reasons or []), *(ctx.decision_reasons or [])]:
             if reason and reason not in merged:
                 merged.append(reason)
-        ctx.reasons = merged[:5] if merged else list(ctx.decision_reasons or [])
+
+        reasoning = build_pipeline_reasoning(
+            decision=ctx.decision,
+            risk_score=float(ctx.bank_risk_score or ctx.risk_score or ctx.fraud_score or 0.0),
+            shap_reasons=list(shap_reasons or []),
+            behavior_reasons=list(ctx.behavior_reasons or []),
+            graph_reasons=list(ctx.graph_reasons or []),
+            rule_reasons=rule_reasons,
+        )
+
+        if reasoning:
+            ctx.reasons = reasoning[:3]
+            ctx.feature_summary["reasoning_summary"] = " ".join(reasoning[:3])
+        else:
+            ctx.reasons = merged[:5] if merged else list(ctx.decision_reasons or [])
+
         ctx.processing_steps.append("shap_explain")
     except Exception as e:
-        ctx.reasons = [*ctx.decision_reasons] or [f"Explainability unavailable: {e}"]
+        fallback = build_pipeline_reasoning(
+            decision=ctx.decision,
+            risk_score=float(ctx.bank_risk_score or ctx.risk_score or ctx.fraud_score or 0.0),
+            shap_reasons=list(ctx.decision_reasons or []),
+            behavior_reasons=list(ctx.behavior_reasons or []),
+            graph_reasons=list(ctx.graph_reasons or []),
+            rule_reasons=rule_reasons,
+        )
+        if fallback:
+            ctx.reasons = fallback[:3]
+            ctx.feature_summary["reasoning_summary"] = " ".join(fallback[:3])
+        else:
+            ctx.reasons = [*ctx.decision_reasons] or [f"Explainability unavailable: {e}"]
         ctx.errors.append(f"SHAP failed: {e}")
     return ctx
 
@@ -632,3 +677,4 @@ def run_pipeline(
     ctx = step_user_warning_payload(ctx)
     ctx = step_audit_logging(ctx, audit_fn)
     return ctx
+

@@ -221,6 +221,7 @@ def load_recent_history(days: int = 7) -> list:
         )
         return [
             {
+                "transaction_id": r.transaction_id,
                 "sender_upi": r.sender_upi,
                 "receiver_upi": r.receiver_upi,
                 "amount": r.amount,

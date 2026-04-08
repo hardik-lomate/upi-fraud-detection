@@ -24,6 +24,7 @@ def log_pipeline_decision(ctx) -> None:
         "ml": float(getattr(ctx, "ml_score", 0.0) or 0.0),
         "behavior": float(getattr(ctx, "behavior_score", 0.0) or 0.0),
         "graph": float(getattr(ctx, "graph_score", 0.0) or 0.0),
+        "anomaly": float(getattr(ctx, "anomaly_score", 0.0) or 0.0),
     }
     risk_components = dict(getattr(ctx, "risk_components", {}) or {})
     audit_features = dict(getattr(ctx, "features", {}) or {})

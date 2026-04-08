@@ -32,6 +32,7 @@ def predict_ml_probability(features: dict) -> dict:
     Response contract:
     {
       "ml_score": float,
+            "anomaly_score": Optional[float],
       "individual_scores": dict,
       "models_used": list[str],
       "weights": dict
@@ -43,9 +44,15 @@ def predict_ml_probability(features: dict) -> dict:
 
     _ensure_models_loaded()
     raw = predict_fraud(features)
+    individual_scores = dict(raw.get("individual_scores", {}))
+    anomaly_raw = raw.get("anomaly_score", None)
+    if anomaly_raw is None and "isolation_forest" in individual_scores:
+        anomaly_raw = individual_scores.get("isolation_forest", 0.0)
+    anomaly_score = None if anomaly_raw is None else max(0.0, min(1.0, float(anomaly_raw or 0.0)))
     return {
         "ml_score": float(raw.get("ensemble_score", 0.0) or 0.0),
-        "individual_scores": dict(raw.get("individual_scores", {})),
+        "anomaly_score": anomaly_score,
+        "individual_scores": individual_scores,
         "models_used": list(raw.get("models_used", [])),
         "weights": dict(raw.get("weights", {})),
     }

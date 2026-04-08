@@ -3,21 +3,103 @@ Graph Feature Extraction — Analyze sender/receiver transaction networks.
 Detects ring transactions, mule accounts, and hub-and-spoke fraud patterns.
 """
 
+import logging
+import os
+import pickle
 import networkx as nx
 import pandas as pd
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
+from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 
 class TransactionGraph:
     """Maintains a rolling transaction graph for fraud pattern detection."""
 
-    def __init__(self):
+    def __init__(self, state_path: str | None = None):
         self.graph = nx.DiGraph()
         self._edge_timestamps = defaultdict(list)  # (sender, receiver) -> [timestamps]
         self._seen_txn_ids = set()
+        env_path = str(os.getenv("GRAPH_STATE_PATH", "")).strip()
+        default_state_path = Path(__file__).resolve().parents[1] / "data" / "transaction_graph.pkl"
+        self._state_path = Path(state_path or env_path or default_state_path)
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.loaded_from_disk = self.load_state()
 
-    def add_transaction(self, sender: str, receiver: str, amount: float, timestamp: str = None, transaction_id: str = None):
+    def load_state(self) -> bool:
+        """Load graph state from disk if available."""
+        if not self._state_path.exists():
+            return False
+
+        try:
+            with open(self._state_path, "rb") as f:
+                payload = pickle.load(f)
+
+            loaded_graph = payload.get("graph")
+            if loaded_graph is None:
+                return False
+
+            self.graph = loaded_graph if isinstance(loaded_graph, nx.DiGraph) else nx.DiGraph(loaded_graph)
+
+            edge_ts = payload.get("edge_timestamps", {}) or {}
+            restored = defaultdict(list)
+            if isinstance(edge_ts, dict):
+                for key, values in edge_ts.items():
+                    try:
+                        src, dst = key
+                        restored[(str(src), str(dst))] = list(values or [])
+                    except Exception:
+                        continue
+            self._edge_timestamps = restored
+
+            seen_ids = payload.get("seen_txn_ids", []) or []
+            self._seen_txn_ids = {str(x) for x in seen_ids if str(x).strip()}
+            logger.info(
+                "Loaded persisted transaction graph from %s (nodes=%s edges=%s)",
+                self._state_path,
+                self.graph.number_of_nodes(),
+                self.graph.number_of_edges(),
+            )
+            return True
+        except Exception as exc:
+            logger.warning("Failed to load graph state from %s: %s", self._state_path, exc)
+            return False
+
+    def save_state(self) -> bool:
+        """Persist graph state to disk atomically."""
+        payload = {
+            "graph": self.graph,
+            "edge_timestamps": dict(self._edge_timestamps),
+            "seen_txn_ids": list(self._seen_txn_ids),
+            "saved_at": datetime.utcnow().isoformat(),
+        }
+        tmp_path = self._state_path.with_suffix(self._state_path.suffix + ".tmp")
+        try:
+            with open(tmp_path, "wb") as f:
+                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp_path, self._state_path)
+            return True
+        except Exception as exc:
+            logger.warning("Failed to persist graph state at %s: %s", self._state_path, exc)
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except Exception:
+                pass
+            return False
+
+    def add_transaction(
+        self,
+        sender: str,
+        receiver: str,
+        amount: float,
+        timestamp: str = None,
+        transaction_id: str = None,
+        persist: bool = True,
+    ):
         """Add a transaction edge to the graph."""
         if transaction_id:
             if transaction_id in self._seen_txn_ids:
@@ -48,6 +130,9 @@ class TransactionGraph:
             if "first_seen" not in self.graph.nodes[node]:
                 self.graph.nodes[node]["first_seen"] = ts.isoformat()
             self.graph.nodes[node]["last_seen"] = ts.isoformat()
+
+        if persist:
+            self.save_state()
 
     def get_node_features(self, node: str) -> dict:
         """Extract graph-based features for a node (sender or receiver)."""
@@ -127,6 +212,8 @@ class TransactionGraph:
             "total_edges": self.graph.number_of_edges(),
             "density": round(nx.density(self.graph), 6) if self.graph.number_of_nodes() > 1 else 0,
             "connected_components": nx.number_weakly_connected_components(self.graph),
+            "loaded_from_disk": bool(self.loaded_from_disk),
+            "state_path": str(self._state_path),
         }
 
 

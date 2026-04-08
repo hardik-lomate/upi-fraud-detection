@@ -124,8 +124,22 @@ def startup():
     records = load_recent_history(days=7)
     hydrate_from_db(records)
     graph = get_graph()
-    for r in records:
-        graph.add_transaction(r["sender_upi"], r["receiver_upi"], r["amount"], r["timestamp"])
+    graph_stats = graph.get_graph_stats()
+    has_persisted_edges = int(graph_stats.get("total_edges", 0) or 0) > 0
+    if not has_persisted_edges and records:
+        for r in records:
+            graph.add_transaction(
+                r["sender_upi"],
+                r["receiver_upi"],
+                r["amount"],
+                r["timestamp"],
+                transaction_id=r.get("transaction_id"),
+                persist=False,
+            )
+        graph.save_state()
+        logger.info("Graph hydrated from %s DB records and persisted", len(records))
+    else:
+        logger.info("Graph state loaded from disk: %s", graph_stats)
     load_reference_distribution()
     load_shap_explainer()
     logger.info(f"Store: {get_store_stats()}")
@@ -489,7 +503,7 @@ def _ctx_to_bank_response(ctx) -> dict:
       risk_score,
       decision: ALLOW|BLOCK|STEP-UP,
       reason: [...],
-            component_scores: {rules, ml, behavior, graph},
+                        component_scores: {rules, ml, behavior, graph, anomaly},
       feature_summary: {...}
     }
     """
@@ -508,6 +522,7 @@ def _ctx_to_bank_response(ctx) -> dict:
         "ml": round(float(getattr(ctx, "ml_score", 0.0) or 0.0), 4),
         "behavior": round(float(getattr(ctx, "behavior_score", 0.0) or 0.0), 4),
         "graph": round(float(getattr(ctx, "graph_score", 0.0) or 0.0), 4),
+        "anomaly": round(float(getattr(ctx, "anomaly_score", 0.0) or 0.0), 4),
     }
 
     summary = {
@@ -515,6 +530,7 @@ def _ctx_to_bank_response(ctx) -> dict:
         "ml_score": float(getattr(ctx, "ml_score", 0.0) or 0.0),
         "behavior_score": float(getattr(ctx, "behavior_score", 0.0) or 0.0),
         "graph_score": float(getattr(ctx, "graph_score", 0.0) or 0.0),
+        "anomaly_score": float(getattr(ctx, "anomaly_score", 0.0) or 0.0),
         "advanced_signals": dict(getattr(ctx, "advanced_signals", {}) or {}),
         "risk_components": dict(getattr(ctx, "risk_components", {}) or {}),
         "key_features": {

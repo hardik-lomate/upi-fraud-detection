@@ -160,7 +160,7 @@ def test_bank_pipeline_linear_order_and_component_usage():
     )
 
     assert ctx.errors == []
-    assert ctx.bank_risk_score == pytest.approx(0.46, abs=1e-6)
+    assert ctx.bank_risk_score == pytest.approx(0.4432, abs=1e-6)
     assert ctx.bank_decision == "ALLOW"
 
     expected_steps = [

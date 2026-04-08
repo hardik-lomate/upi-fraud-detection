@@ -1,6 +1,7 @@
 {
-  "rules": 0.3,
-  "ml": 0.4,
-  "behavior": 0.2,
-  "graph": 0.1
+  "rules": 0.27,
+  "ml": 0.33,
+  "behavior": 0.18,
+  "graph": 0.1,
+  "anomaly": 0.12
 }

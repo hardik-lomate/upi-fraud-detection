@@ -88,10 +88,11 @@ BANK_BLOCK_THRESHOLD = 0.80
 
 # Unified risk score component weights
 RISK_COMPONENT_WEIGHTS = {
-    "rules": 0.30,
-    "ml": 0.40,
-    "behavior": 0.20,
+    "rules": 0.27,
+    "ml": 0.33,
+    "behavior": 0.18,
     "graph": 0.10,
+    "anomaly": 0.12,
 }
 
 # Backward-compatible aliases used by older code paths
@@ -157,7 +158,7 @@ ENSEMBLE_DEFAULTS = {
     "lightgbm": 0.35,
     "xgboost": 0.30,
     "catboost": 0.25,
-    "isolation_forest": 0.10,
+    "isolation_forest": 0.15,
 }
 
 # ======================================================================

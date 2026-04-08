@@ -14,11 +14,28 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
+def _env_bool(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    val = str(raw).strip().lower()
+    if val in {"1", "true", "yes", "on"}:
+        return True
+    if val in {"0", "false", "no", "off"}:
+        return False
+    logger.warning("Invalid %s=%r. Falling back to default=%s", name, raw, default)
+    return bool(default)
+
+
+def is_auth_required() -> bool:
+    return _env_bool("AUTH_REQUIRED", default=True)
+
 # Secret key — MUST be set via environment variable
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 if not SECRET_KEY:
     # In development, use a default but warn loudly
-    if os.getenv("AUTH_REQUIRED", "true").lower() == "false":
+    if not is_auth_required():
         SECRET_KEY = "dev-only-insecure-key-do-not-use-in-production"
         logger.warning("[WARN] Using insecure dev JWT key. Set JWT_SECRET_KEY in production.")
     else:
@@ -83,8 +100,10 @@ def verify_token(token: str) -> dict:
 
 
 async def get_current_client(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    auth_required = is_auth_required()
+
     if credentials is None:
-        if os.getenv("AUTH_REQUIRED", "true").lower() == "true":
+        if auth_required:
             raise HTTPException(status_code=401, detail="Authentication required. Provide Bearer token.")
         return {"sub": "anonymous", "client": "Anonymous", "permissions": ["predict", "transactions", "audit"]}
 
@@ -92,8 +111,16 @@ async def get_current_client(credentials: HTTPAuthorizationCredentials = Depends
     if token in API_KEYS:
         client = API_KEYS[token]
         if not client["active"]:
+            if not auth_required:
+                return {"sub": "anonymous", "client": "Anonymous", "permissions": ["predict", "transactions", "audit"]}
             raise HTTPException(status_code=403, detail="API key deactivated")
         return {"sub": token, "client": client["client_name"], "permissions": client["permissions"]}
+
+    if not auth_required:
+        try:
+            return verify_token(token)
+        except HTTPException:
+            return {"sub": "anonymous", "client": "Anonymous", "permissions": ["predict", "transactions", "audit"]}
 
     return verify_token(token)
 

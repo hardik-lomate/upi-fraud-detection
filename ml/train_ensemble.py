@@ -96,7 +96,15 @@ print(f"LightGBM CV PR AUC:  {lgbm_cv_pr.mean():.4f} ± {lgbm_cv_pr.std():.4f}")
 
 # ========== 5. Ensemble ==========
 print("\n=== Ensemble ===")
-w = ENSEMBLE_DEFAULTS
+w_raw = dict(ENSEMBLE_DEFAULTS)
+active_sum = float(w_raw.get("xgboost", 0.0) + w_raw.get("lightgbm", 0.0) + w_raw.get("isolation_forest", 0.0))
+if active_sum <= 0:
+    active_sum = 1.0
+w = {
+    "xgboost": float(w_raw.get("xgboost", 0.0)) / active_sum,
+    "lightgbm": float(w_raw.get("lightgbm", 0.0)) / active_sum,
+    "isolation_forest": float(w_raw.get("isolation_forest", 0.0)) / active_sum,
+}
 ensemble_proba = w["xgboost"] * xgb_proba + w["lightgbm"] * lgbm_proba + w["isolation_forest"] * iso_proba
 ens_auc = roc_auc_score(y_test, ensemble_proba)
 ens_pr = average_precision_score(y_test, ensemble_proba)
@@ -140,8 +148,24 @@ joblib.dump(xgb_model, "ml/models/xgboost_model.pkl")
 joblib.dump(lgbm_model, "ml/models/lightgbm_model.pkl")
 joblib.dump(iso_model, "ml/models/isolation_forest_model.pkl")
 joblib.dump(FEATURE_COLUMNS, "ml/models/feature_columns.pkl")
-joblib.dump(ENSEMBLE_DEFAULTS, "ml/models/ensemble_weights.pkl")
+joblib.dump(w, "ml/models/ensemble_weights.pkl")
 joblib.dump(iso_calib, "ml/models/iso_calibration.pkl")
+
+model_bundle = {
+    "models": {
+        "xgboost": xgb_model,
+        "lightgbm": lgbm_model,
+        "isolation_forest": iso_model,
+    },
+    "weights": w,
+    "iso_calibration": iso_calib,
+    "feature_columns": FEATURE_COLUMNS,
+    "threshold_block": float(threshold_block),
+    "threshold_flag": float(threshold_flag),
+    "trained_at": datetime.now().isoformat(),
+}
+joblib.dump(model_bundle, "ml/models/model.pkl")
+joblib.dump(FEATURE_COLUMNS, "ml/models/features.pkl")
 
 # Thresholds
 thresholds_data = {
@@ -168,7 +192,7 @@ metadata = {
     "test_data_rows": len(X_test),
     "training_fraud_rate": round(float(pos / len(y_train)), 4),
     "feature_columns": FEATURE_COLUMNS,
-    "ensemble_weights": ENSEMBLE_DEFAULTS,
+    "ensemble_weights": w,
     "thresholds": thresholds_data,
     "per_model_metrics": {
         "xgboost": {"roc_auc": round(xgb_auc, 4), "pr_auc": round(xgb_pr, 4),
@@ -194,6 +218,7 @@ with open("ml/models/model_metadata.json", "w") as f:
 
 print(f"\n[OK] All saved:")
 print(f"  Models: xgboost, lightgbm, isolation_forest")
+print(f"  Bundle: model.pkl, features.pkl")
 print(f"  Calibration: iso_calibration.pkl")
 print(f"  Thresholds: {thresholds_data}")
 print(f"  Metadata: model_metadata.json")
