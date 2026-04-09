@@ -588,7 +588,6 @@ def root():
         "message": "API running"
     }
 
-
 @app.get("/api/v1/predict", include_in_schema=False)
 @app.get("/predict", include_in_schema=False)
 async def predict_usage_help():
