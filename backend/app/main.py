@@ -585,7 +585,7 @@ def _bg_audit(txn_id, sender, receiver, amount, fraud_score, decision, risk_leve
 def root():
     return {
         "status": "ok",
-        "message": "UPI Fraud Detection API running"
+        "message": "API running"
     }
 
 
