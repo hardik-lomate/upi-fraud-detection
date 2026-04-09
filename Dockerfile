@@ -2,16 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install deps
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source
 COPY backend/ ./backend/
-COPY ml/models/ ./ml/models/
-COPY monitoring/ ./monitoring/
 COPY feature_contract.py .
-COPY api_keys.json .
+COPY ml/ ./ml/
+COPY monitoring/ ./monitoring/
+
+# Create empty api_keys.json — auth.py falls back to built-in dev keys
+RUN echo '{}' > ./api_keys.json
 
 EXPOSE 8000
 
