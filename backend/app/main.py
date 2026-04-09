@@ -582,10 +582,10 @@ def _bg_audit(txn_id, sender, receiver, amount, fraud_score, decision, risk_leve
 # =============================================
 
 @app.get("/")
-def home():
+def root():
     return {
-        "message": "UPI Fraud Detection API running",
-        "docs": "/health and /predict"
+        "status": "ok",
+        "message": "UPI Fraud Detection API running"
     }
 
 
@@ -1487,14 +1487,9 @@ app.include_router(rbi_router, prefix="/api/v1")
 # Health Checks
 # =============================================
 
-@app.get("/health", summary="Quick health check")
-async def health():
-    return {
-        "status": "ok", "version": "2.0.0",
-        "model_version": MODEL_VERSION,
-        "store": get_store_stats(),
-        "timestamp": datetime.now().isoformat(),
-    }
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 @app.get("/health/live", summary="Liveness probe (Kubernetes)")
 async def liveness():
