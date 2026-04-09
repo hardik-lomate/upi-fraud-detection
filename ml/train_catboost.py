@@ -12,6 +12,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from feature_contract import FEATURE_COLUMNS, MODEL_VERSION
@@ -26,14 +27,17 @@ from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val
 from sklearn.metrics import roc_auc_score, average_precision_score, classification_report
 import joblib
 
+BASE_DIR = Path(__file__).resolve().parent
+DATA_PATH = BASE_DIR / "data" / "processed" / "features.csv"
+MODELS_DIR = BASE_DIR / "models"
+
 # ========== Load Data ==========
-data_path = "ml/data/processed/features.csv"
-if not os.path.exists(data_path):
-    print(f"[ERROR] Data file not found: {data_path}")
+if not DATA_PATH.exists():
+    print(f"[ERROR] Data file not found: {DATA_PATH}")
     print("Run ml/generate_data.py and ml/feature_engineering.py first.")
     sys.exit(1)
 
-df = pd.read_csv(data_path)
+df = pd.read_csv(DATA_PATH)
 X = df[FEATURE_COLUMNS]
 y = df["is_fraud"]
 
@@ -88,7 +92,8 @@ for feat, imp in feat_imp:
     print(f"  {feat:35s} {imp:.4f}")
 
 # ========== Save ==========
-os.makedirs("ml/models", exist_ok=True)
-joblib.dump(cat_model, "ml/models/catboost_model.pkl")
-print(f"\n[OK] CatBoost model saved to ml/models/catboost_model.pkl")
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+out_path = MODELS_DIR / "catboost_model.pkl"
+joblib.dump(cat_model, out_path)
+print(f"\n[OK] CatBoost model saved to {out_path}")
 print(f"     ROC AUC: {cat_auc:.4f}, PR AUC: {cat_pr:.4f}")

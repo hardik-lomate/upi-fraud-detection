@@ -1,9 +1,12 @@
 """End-to-end verification of all critical endpoints."""
 from datetime import datetime
+import os
 import requests
 import sys
 
-BASE = "http://127.0.0.1:8000"
+BASE = str(os.getenv("UPI_API_BASE_URL", "")).strip().rstrip("/")
+if not BASE:
+    raise RuntimeError("Set UPI_API_BASE_URL, for example: https://your-backend.up.railway.app")
 PASS = 0
 FAIL = 0
 

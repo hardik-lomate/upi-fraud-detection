@@ -10,7 +10,7 @@ COPY feature_contract.py .
 COPY ml/ ./ml/
 COPY monitoring/ ./monitoring/
 
-# Create empty api_keys.json — auth.py falls back to built-in dev keys
+# Create default api_keys.json (auth.py falls back to built-in dev keys)
 RUN echo '{}' > ./api_keys.json
 
 EXPOSE 8000

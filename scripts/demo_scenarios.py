@@ -7,11 +7,14 @@ Run:
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import os
 import time
 
 import requests
 
-API_URL = "http://127.0.0.1:8000"
+API_URL = str(os.getenv("UPI_API_BASE_URL", "")).strip().rstrip("/")
+if not API_URL:
+    raise RuntimeError("Set UPI_API_BASE_URL, for example: https://your-backend.up.railway.app")
 PRECHECK_ENDPOINT = f"{API_URL}/api/v1/pre-check"
 
 DEMO_TRANSACTIONS = [

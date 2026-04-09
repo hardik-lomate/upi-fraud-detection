@@ -10,6 +10,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from feature_contract import FEATURE_COLUMNS, ENSEMBLE_DEFAULTS, MODEL_VERSION
@@ -24,8 +25,14 @@ from sklearn.metrics import (
 )
 import joblib
 
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
+DATA_PATH = BASE_DIR / "data" / "processed" / "features.csv"
+MODELS_DIR = BASE_DIR / "models"
+MONITORING_DIR = PROJECT_ROOT / "monitoring"
+
 # ========== Load Data ==========
-df = pd.read_csv("ml/data/processed/features.csv")
+df = pd.read_csv(DATA_PATH)
 X = df[FEATURE_COLUMNS]
 y = df["is_fraud"]
 
@@ -141,15 +148,15 @@ for feat, imp in feat_imp:
     print(f"  {feat:35s} {imp:.4f}")
 
 # ========== Save Everything ==========
-os.makedirs("ml/models", exist_ok=True)
-os.makedirs("monitoring", exist_ok=True)
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+MONITORING_DIR.mkdir(parents=True, exist_ok=True)
 
-joblib.dump(xgb_model, "ml/models/xgboost_model.pkl")
-joblib.dump(lgbm_model, "ml/models/lightgbm_model.pkl")
-joblib.dump(iso_model, "ml/models/isolation_forest_model.pkl")
-joblib.dump(FEATURE_COLUMNS, "ml/models/feature_columns.pkl")
-joblib.dump(w, "ml/models/ensemble_weights.pkl")
-joblib.dump(iso_calib, "ml/models/iso_calibration.pkl")
+joblib.dump(xgb_model, MODELS_DIR / "xgboost_model.pkl")
+joblib.dump(lgbm_model, MODELS_DIR / "lightgbm_model.pkl")
+joblib.dump(iso_model, MODELS_DIR / "isolation_forest_model.pkl")
+joblib.dump(FEATURE_COLUMNS, MODELS_DIR / "feature_columns.pkl")
+joblib.dump(w, MODELS_DIR / "ensemble_weights.pkl")
+joblib.dump(iso_calib, MODELS_DIR / "iso_calibration.pkl")
 
 model_bundle = {
     "models": {
@@ -164,8 +171,8 @@ model_bundle = {
     "threshold_flag": float(threshold_flag),
     "trained_at": datetime.now().isoformat(),
 }
-joblib.dump(model_bundle, "ml/models/model.pkl")
-joblib.dump(FEATURE_COLUMNS, "ml/models/features.pkl")
+joblib.dump(model_bundle, MODELS_DIR / "model.pkl")
+joblib.dump(FEATURE_COLUMNS, MODELS_DIR / "features.pkl")
 
 # Thresholds
 thresholds_data = {
@@ -177,11 +184,11 @@ thresholds_data = {
     "block_recall": round(float(recall_arr[best_idx]), 4),
     "block_f05": round(float(f_beta[best_idx]), 4),
 }
-with open("ml/models/thresholds.json", "w") as f:
+with open(MODELS_DIR / "thresholds.json", "w") as f:
     json.dump(thresholds_data, f, indent=2)
 
 # Reference distribution
-with open("monitoring/reference_distribution.json", "w") as f:
+with open(MONITORING_DIR / "reference_distribution.json", "w") as f:
     json.dump(ensemble_proba.tolist(), f)
 
 # Rich metadata
@@ -213,7 +220,7 @@ metadata = {
     "iso_calibration": iso_calib,
     "class_distribution": {"fraud": int(pos), "legit": int(neg)},
 }
-with open("ml/models/model_metadata.json", "w") as f:
+with open(MODELS_DIR / "model_metadata.json", "w") as f:
     json.dump(metadata, f, indent=2)
 
 print(f"\n[OK] All saved:")

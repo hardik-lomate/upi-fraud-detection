@@ -22,8 +22,35 @@ from feature_contract import FEATURE_COLUMNS as CONTRACT_FEATURE_COLUMNS
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
-MODELS_DIR = BASE_DIR.parent.parent / "ml" / "models"
+DEFAULT_MODELS_DIR = BASE_DIR.parent.parent / "ml" / "models"
+COMPAT_MODELS_DIR = BASE_DIR.parent.parent / "model"
 _FEATURE_COLUMNS_CACHE: Optional[List[str]] = None
+
+
+def _model_dirs() -> List[Path]:
+    env_dir = str(os.getenv("MODEL_DIR", "")).strip()
+    candidates: List[Path] = []
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser())
+    candidates.extend([DEFAULT_MODELS_DIR, COMPAT_MODELS_DIR])
+
+    out: List[Path] = []
+    seen = set()
+    for item in candidates:
+        resolved = item.resolve()
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(resolved)
+    return out
+
+
+def _load_columns_from_file(path: Path) -> List[str]:
+    loaded = joblib.load(path)
+    if not isinstance(loaded, list) or not all(isinstance(x, str) for x in loaded):
+        raise TypeError(f"{path.name} must be a list[str]")
+    return loaded
 
 
 def get_feature_columns() -> List[str]:
@@ -32,28 +59,36 @@ def get_feature_columns() -> List[str]:
     if _FEATURE_COLUMNS_CACHE is not None:
         return _FEATURE_COLUMNS_CACHE
 
-    path = MODELS_DIR / "feature_columns.pkl"
     cols: List[str]
 
-    if path.exists():
-        try:
-            loaded = joblib.load(path)
-            if not isinstance(loaded, list) or not all(isinstance(x, str) for x in loaded):
-                raise TypeError("feature_columns.pkl must be a list[str]")
-            cols = loaded
+    cols = []
+    loaded_from: Optional[Path] = None
+    for model_dir in _model_dirs():
+        for file_name in ("feature_columns.pkl", "features.pkl"):
+            path = model_dir / file_name
+            if not path.exists():
+                continue
+            try:
+                cols = _load_columns_from_file(path)
+                loaded_from = path
+                break
+            except Exception as exc:
+                logger.warning("Failed to load %s: %s", path, exc)
+        if loaded_from is not None:
+            break
 
-            # Warn (but don't crash) if contract differs. Demo stability > hard fail.
-            if set(cols) != set(CONTRACT_FEATURE_COLUMNS):
-                logger.warning(
-                    "Feature column mismatch: contract=%s, model_file=%s. Using model_file order.",
-                    CONTRACT_FEATURE_COLUMNS,
-                    cols,
-                )
-        except Exception as e:
-            logger.warning("Failed to load %s: %s. Falling back to contract.", path, e)
-            cols = list(CONTRACT_FEATURE_COLUMNS)
-    else:
+    if not cols:
         cols = list(CONTRACT_FEATURE_COLUMNS)
+    elif set(cols) != set(CONTRACT_FEATURE_COLUMNS):
+        # Warn (but don't crash) if contract differs. Demo stability > hard fail.
+        logger.warning(
+            "Feature column mismatch: contract=%s, model_file=%s. Using model_file order.",
+            CONTRACT_FEATURE_COLUMNS,
+            cols,
+        )
+
+    if loaded_from is not None:
+        logger.info("Loaded feature columns from %s", loaded_from)
 
     # Basic sanity: unique, stable order.
     seen = set()

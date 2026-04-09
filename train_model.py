@@ -22,9 +22,10 @@ from xgboost import XGBClassifier
 from feature_contract import FEATURE_COLUMNS, TXN_TYPE_MAP, validate_feature_schema
 
 
-DATASET_PATH = Path("data/fraud_dataset.csv")
-MODEL_DIR = Path("ml/models")
-METRICS_PATH = Path("metrics_report.json")
+BASE_DIR = Path(__file__).resolve().parent
+DATASET_PATH = BASE_DIR / "data" / "fraud_dataset.csv"
+MODEL_DIR = BASE_DIR / "ml" / "models"
+METRICS_PATH = BASE_DIR / "metrics_report.json"
 
 
 def _require_dataset(path: Path) -> pd.DataFrame:

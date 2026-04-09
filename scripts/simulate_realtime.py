@@ -7,6 +7,7 @@ Usage examples:
 """
 
 import argparse
+import os
 import time
 from datetime import datetime
 import random
@@ -14,7 +15,10 @@ import random
 import requests
 
 
-API_URL = "http://127.0.0.1:8000/predict"
+API_BASE_URL = str(os.getenv("UPI_API_BASE_URL", "")).strip().rstrip("/")
+if not API_BASE_URL:
+    raise RuntimeError("Set UPI_API_BASE_URL, for example: https://your-backend.up.railway.app")
+API_URL = f"{API_BASE_URL}/predict"
 
 SENDERS = [f"user{i:04d}@upi" for i in range(600)]
 MERCHANTS = [f"merchant{i:04d}@upi" for i in range(450)]

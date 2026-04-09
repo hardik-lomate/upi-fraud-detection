@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from datetime import datetime, timedelta
 
 import requests
 
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = str(os.getenv("UPI_API_BASE_URL", "")).strip().rstrip("/")
+if not BASE_URL:
+    raise RuntimeError("Set UPI_API_BASE_URL, for example: https://your-backend.up.railway.app")
 PREDICT_URL = f"{BASE_URL}/predict"
 
 

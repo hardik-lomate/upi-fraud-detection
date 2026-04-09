@@ -1,12 +1,15 @@
 """Lock-check: deterministic /predict output for identical input."""
 
 import json
+import os
 import sys
 import time
 
 import requests
 
-BASE = "http://127.0.0.1:8000"
+BASE = str(os.getenv("UPI_API_BASE_URL", "")).strip().rstrip("/")
+if not BASE:
+    raise RuntimeError("Set UPI_API_BASE_URL, for example: https://your-backend.up.railway.app")
 
 RUN_ID = str(int(time.time()))
 

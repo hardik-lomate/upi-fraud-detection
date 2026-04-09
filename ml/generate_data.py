@@ -3,6 +3,7 @@ import numpy as np
 import random
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 random.seed(42)
 np.random.seed(42)
@@ -17,6 +18,11 @@ senders = [f"user{i}@upi" for i in range(NUM_SENDERS)]
 receivers = [f"merchant{i}@upi" for i in range(NUM_RECEIVERS)]
 devices = [f"DEV_{uuid.uuid4().hex[:8].upper()}" for _ in range(NUM_SENDERS)]
 txn_types = ["purchase", "transfer", "bill_payment", "recharge"]
+
+BASE_DIR = Path(__file__).resolve().parent
+RAW_DATA_DIR = BASE_DIR / "data" / "raw"
+PROCESSED_DATA_DIR = BASE_DIR / "data" / "processed"
+MODELS_DIR = BASE_DIR / "models"
 
 
 def generate_transaction(idx, is_fraud=False):
@@ -64,11 +70,9 @@ def generate_transaction(idx, is_fraud=False):
 
 
 if __name__ == "__main__":
-    import os
-
-    os.makedirs("ml/data/raw", exist_ok=True)
-    os.makedirs("ml/data/processed", exist_ok=True)
-    os.makedirs("ml/models", exist_ok=True)
+    RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
     num_fraud = int(NUM_TRANSACTIONS * FRAUD_RATIO)
     num_legit = NUM_TRANSACTIONS - num_fraud
@@ -82,7 +86,7 @@ if __name__ == "__main__":
     df = pd.DataFrame(transactions)
     df = df.sample(frac=1, random_state=42).reset_index(drop=True)
 
-    df.to_csv("ml/data/raw/transactions.csv", index=False)
+    df.to_csv(RAW_DATA_DIR / "transactions.csv", index=False)
     print(f"Generated {len(df)} transactions ({num_fraud} fraud, {num_legit} legit)")
     print(f"Fraud ratio: {num_fraud / len(df) * 100:.1f}%")
     print(df.head())

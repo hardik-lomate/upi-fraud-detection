@@ -9,10 +9,16 @@ import pandas as pd
 import numpy as np
 import sys
 import os
+from pathlib import Path
 
 # Add project root to path so we can import feature_contract
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from feature_contract import FEATURE_COLUMNS, TXN_TYPE_MAP, NIGHT_HOUR_CUTOFF, WEEKEND_DAY_CUTOFF
+
+
+BASE_DIR = Path(__file__).resolve().parent
+RAW_TRANSACTIONS_PATH = BASE_DIR / "data" / "raw" / "transactions.csv"
+PROCESSED_FEATURES_PATH = BASE_DIR / "data" / "processed" / "features.csv"
 
 
 WINDOW_1M = timedelta(minutes=1)
@@ -347,7 +353,7 @@ def engineer_features(df):
 
 
 if __name__ == "__main__":
-    df = pd.read_csv("ml/data/raw/transactions.csv")
+    df = pd.read_csv(RAW_TRANSACTIONS_PATH)
     print(f"Loaded {len(df)} transactions")
     print("Engineering features...")
 
@@ -358,7 +364,8 @@ if __name__ == "__main__":
     if "is_fraud" in df.columns:
         output_cols.append("is_fraud")
     df_out = df[output_cols]
-    df_out.to_csv("ml/data/processed/features.csv", index=False)
+    PROCESSED_FEATURES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df_out.to_csv(PROCESSED_FEATURES_PATH, index=False)
     print(f"Saved {len(df_out)} rows with {len(FEATURE_COLUMNS)} features")
     print(f"Feature order: {FEATURE_COLUMNS}")
     print(df_out.describe())

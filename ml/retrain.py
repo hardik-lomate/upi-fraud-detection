@@ -20,6 +20,7 @@ import os
 import sys
 import argparse
 from datetime import datetime
+from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -33,19 +34,25 @@ from sklearn.metrics import classification_report, roc_auc_score, average_precis
 import joblib
 
 
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
+PROCESSED_DATA_PATH = BASE_DIR / "data" / "processed" / "features.csv"
+FEEDBACK_LABELS_PATH = BASE_DIR / "data" / "feedback" / "confirmed_labels.csv"
+MODELS_DIR = BASE_DIR / "models"
+MONITORING_DIR = PROJECT_ROOT / "monitoring"
+
+
 def load_training_data():
     """Load feature-engineered data. In production, merge with feedback labels."""
-    base_path = "ml/data/processed/features.csv"
-    if not os.path.exists(base_path):
+    if not PROCESSED_DATA_PATH.exists():
         print("ERROR: No processed features found. Run feature_engineering.py first.")
         sys.exit(1)
 
-    df = pd.read_csv(base_path)
+    df = pd.read_csv(PROCESSED_DATA_PATH)
 
     # Check for feedback data (confirmed fraud labels from production)
-    feedback_path = "ml/data/feedback/confirmed_labels.csv"
-    if os.path.exists(feedback_path):
-        feedback = pd.read_csv(feedback_path)
+    if FEEDBACK_LABELS_PATH.exists():
+        feedback = pd.read_csv(FEEDBACK_LABELS_PATH)
         print(f"Merging {len(feedback)} feedback labels...")
         df = pd.concat([df, feedback[FEATURE_COLUMNS + ["is_fraud"]]], ignore_index=True)
 
@@ -104,17 +111,17 @@ def train_and_save(df, version_tag=None):
     print(classification_report(y_test, (ensemble >= 0.5).astype(int)))
 
     # Save
-    os.makedirs("ml/models", exist_ok=True)
-    os.makedirs("monitoring", exist_ok=True)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    MONITORING_DIR.mkdir(parents=True, exist_ok=True)
 
-    joblib.dump(xgb, "ml/models/xgboost_model.pkl")
-    joblib.dump(lgbm, "ml/models/lightgbm_model.pkl")
-    joblib.dump(iso, "ml/models/isolation_forest_model.pkl")
-    joblib.dump(FEATURE_COLUMNS, "ml/models/feature_columns.pkl")
-    joblib.dump(ENSEMBLE_DEFAULTS, "ml/models/ensemble_weights.pkl")
+    joblib.dump(xgb, MODELS_DIR / "xgboost_model.pkl")
+    joblib.dump(lgbm, MODELS_DIR / "lightgbm_model.pkl")
+    joblib.dump(iso, MODELS_DIR / "isolation_forest_model.pkl")
+    joblib.dump(FEATURE_COLUMNS, MODELS_DIR / "feature_columns.pkl")
+    joblib.dump(ENSEMBLE_DEFAULTS, MODELS_DIR / "ensemble_weights.pkl")
 
     ref_scores = ensemble.tolist()
-    with open("monitoring/reference_distribution.json", "w") as f:
+    with open(MONITORING_DIR / "reference_distribution.json", "w") as f:
         json.dump(ref_scores, f)
 
     # Save metadata
@@ -129,7 +136,7 @@ def train_and_save(df, version_tag=None):
         "feature_columns": FEATURE_COLUMNS,
         "weights": ENSEMBLE_DEFAULTS,
     }
-    with open("ml/models/model_metadata.json", "w") as f:
+    with open(MODELS_DIR / "model_metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
 
     print(f"\n✅ Models saved (version: {version})")

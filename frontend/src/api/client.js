@@ -1,6 +1,12 @@
 import axios from 'axios';
 
-export const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const configuredApiUrl = String(process.env.REACT_APP_API_URL || '').trim().replace(/\/+$/, '');
+
+if (!configuredApiUrl) {
+  throw new Error('Missing REACT_APP_API_URL. Set it to your deployed backend URL.');
+}
+
+export const API_URL = configuredApiUrl;
 
 export const api = axios.create({
   baseURL: API_URL,

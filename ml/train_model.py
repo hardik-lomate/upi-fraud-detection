@@ -33,7 +33,12 @@ except Exception:
     CatBoostClassifier = None
 
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
+DATA_PATH = BASE_DIR / "data" / "processed" / "features.csv"
+MODELS_DIR = BASE_DIR / "models"
+REPORTS_DIR = BASE_DIR / "reports"
+ROOT_METRICS_PATH = PROJECT_ROOT / "metrics_report.json"
 
 
 def _safe_proba(model, x):
@@ -61,7 +66,7 @@ def _validate_training_inputs(df: pd.DataFrame) -> None:
 
 
 def main():
-    df = pd.read_csv("ml/data/processed/features.csv")
+    df = pd.read_csv(DATA_PATH)
     _validate_training_inputs(df)
 
     x = df[FEATURE_COLUMNS].apply(pd.to_numeric, errors="coerce").fillna(0.0)
@@ -182,25 +187,25 @@ def main():
     # Backward-compatible alias retained for older readers.
     metrics["f1"] = metrics["f1_score"]
 
-    os.makedirs("ml/models", exist_ok=True)
-    os.makedirs("ml/reports", exist_ok=True)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    joblib.dump(lgbm_model, "ml/models/lightgbm_model.pkl")
-    joblib.dump(xgb_model, "ml/models/xgboost_model.pkl")
+    joblib.dump(lgbm_model, MODELS_DIR / "lightgbm_model.pkl")
+    joblib.dump(xgb_model, MODELS_DIR / "xgboost_model.pkl")
     if cat_model is not None:
-        joblib.dump(cat_model, "ml/models/catboost_model.pkl")
-    joblib.dump(iso_model, "ml/models/isolation_forest_model.pkl")
-    joblib.dump(iso_calibration, "ml/models/iso_calibration.pkl")
-    joblib.dump(FEATURE_COLUMNS, "ml/models/feature_columns.pkl")
-    joblib.dump(used_weights, "ml/models/ensemble_weights.pkl")
+        joblib.dump(cat_model, MODELS_DIR / "catboost_model.pkl")
+    joblib.dump(iso_model, MODELS_DIR / "isolation_forest_model.pkl")
+    joblib.dump(iso_calibration, MODELS_DIR / "iso_calibration.pkl")
+    joblib.dump(FEATURE_COLUMNS, MODELS_DIR / "feature_columns.pkl")
+    joblib.dump(used_weights, MODELS_DIR / "ensemble_weights.pkl")
 
-    with open("ml/models/metrics.json", "w", encoding="utf-8") as f:
+    with open(MODELS_DIR / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
-    with open(ROOT_DIR / "metrics_report.json", "w", encoding="utf-8") as f:
+    with open(ROOT_METRICS_PATH, "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
-    with open("ml/models/metrics_report.json", "w", encoding="utf-8") as f:
+    with open(MODELS_DIR / "metrics_report.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
     metadata = {
@@ -219,7 +224,7 @@ def main():
             "pr_auc": metrics["pr_auc"],
         },
     }
-    with open("ml/models/model_metadata.json", "w", encoding="utf-8") as f:
+    with open(MODELS_DIR / "model_metadata.json", "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
 
     # SHAP export from LightGBM (primary model)
@@ -228,10 +233,10 @@ def main():
     shap_values = explainer(sample)
     shap.summary_plot(shap_values, sample, feature_names=FEATURE_COLUMNS, show=False)
     plt.tight_layout()
-    plt.savefig("ml/reports/shap_summary.png", dpi=180)
+    plt.savefig(REPORTS_DIR / "shap_summary.png", dpi=180)
     plt.close()
 
-    joblib.dump(explainer, "ml/models/shap_explainer.pkl")
+    joblib.dump(explainer, MODELS_DIR / "shap_explainer.pkl")
 
     print("Training complete")
     print(

@@ -98,11 +98,22 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+def _resolve_cors_origins() -> list[str]:
+    raw = str(os.getenv("CORS_ORIGINS", "")).strip()
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()]
+
+    fallback = []
+    frontend_url = str(os.getenv("FRONTEND_URL", "")).strip()
+    if frontend_url:
+        fallback.append(frontend_url)
+    fallback.append("http://localhost:3000")
+    return fallback
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()
-    ],
+    allow_origins=_resolve_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -569,6 +580,46 @@ def _bg_audit(txn_id, sender, receiver, amount, fraud_score, decision, risk_leve
 # =============================================
 # Core Endpoints
 # =============================================
+
+@app.get("/", summary="Service status and quick start")
+async def home():
+    return {
+        "status": "API running",
+        "message": "UPI Fraud Detection API is live",
+        "version": MODEL_VERSION,
+        "docs": "/docs",
+        "health": "/health",
+        "quickstart": {
+            "predict": {
+                "method": "POST",
+                "path": "/predict",
+                "required_json_fields": ["sender_upi", "receiver_upi", "amount"],
+                "sample_request": {
+                    "sender_upi": "alice@upi",
+                    "receiver_upi": "merchant@upi",
+                    "amount": 15000,
+                    "transaction_type": "transfer",
+                },
+            }
+        },
+    }
+
+
+@app.get("/api/v1/predict", include_in_schema=False)
+@app.get("/predict", include_in_schema=False)
+async def predict_usage_help():
+    return {
+        "status": "method_help",
+        "message": "Do NOT test in browser. Use POST request.",
+        "allowed_method": "POST",
+        "note": "GET /predict only returns usage guidance.",
+        "sample_request": {
+            "sender_upi": "alice@upi",
+            "receiver_upi": "merchant@upi",
+            "amount": 15000,
+            "transaction_type": "transfer",
+        },
+    }
 
 @app.post("/api/v1/predict", response_model=PredictionResponse, include_in_schema=False)
 @app.post("/predict", response_model=PredictionResponse,
