@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
+import re
 
 from .database import get_transaction_by_id
 from .audit import get_prediction_audit_record
@@ -53,13 +54,73 @@ def _time_context(timestamp_str: str) -> str:
 
 def _dedupe_text(values: list[str] | None, limit: int = 3) -> list[str]:
     unique: list[str] = []
+    seen: set[str] = set()
     for raw in values or []:
-        text = str(raw or "").strip().rstrip(".")
-        if text and text not in unique:
+        text = _simplify_reason_text(str(raw or ""))
+        key = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", text.lower())).strip()
+        if text and key and key not in seen:
             unique.append(text)
+            seen.add(key)
         if len(unique) >= limit:
             break
     return unique
+
+
+def _simplify_reason_text(text: str) -> str:
+    raw = str(text or "").strip().rstrip(".")
+    lowered = raw.lower()
+
+    phrase_rules = [
+        ("new device", "payment came from a new device"),
+        ("failed", "many recent failed attempts were seen"),
+        ("velocity", "many quick transactions were attempted"),
+        ("burst", "many quick transactions were attempted"),
+        ("night", "transaction happened at an unusual hour"),
+        ("late", "transaction happened at an unusual hour"),
+        ("mule", "receiver is linked to suspicious accounts"),
+        ("graph", "receiver is linked to a risky transaction network"),
+        ("network", "receiver is linked to a risky transaction network"),
+        ("deviation", "amount is unusual for this sender"),
+        ("high amount", "amount is much higher than usual"),
+        ("drift", "recent behavior differs from the sender's normal pattern"),
+        ("anomaly", "transaction behavior is unusual"),
+    ]
+
+    for needle, phrase in phrase_rules:
+        if needle in lowered:
+            return phrase
+
+    cleaned = raw.replace("_", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > 88:
+        cleaned = cleaned[:85].rstrip() + "..."
+    return cleaned[0].upper() + cleaned[1:]
+
+
+def _top_reason_snippets(
+    shap_reasons: list[str] | None,
+    behavior_reasons: list[str] | None,
+    graph_reasons: list[str] | None,
+    rule_reasons: list[str] | None,
+    limit: int = 3,
+) -> list[str]:
+    ordered_sources = [
+        _dedupe_text(rule_reasons, limit=2),
+        _dedupe_text(graph_reasons, limit=2),
+        _dedupe_text(behavior_reasons, limit=2),
+        _dedupe_text(shap_reasons, limit=2),
+    ]
+
+    merged: list[str] = []
+    for source in ordered_sources:
+        for reason in source:
+            if reason not in merged:
+                merged.append(reason)
+            if len(merged) >= limit:
+                return merged
+    return merged
 
 
 def build_pipeline_reasoning(
@@ -70,7 +131,7 @@ def build_pipeline_reasoning(
     graph_reasons: list[str] | None = None,
     rule_reasons: list[str] | None = None,
 ) -> list[str]:
-    """Build a concise 2-3 sentence explanation from all major risk signals."""
+    """Build concise plain-language reasoning from strongest risk signals."""
     score = max(0.0, min(1.0, float(risk_score or 0.0)))
     score_pct = int(round(score * 100))
     decision_norm = str(decision or "ALLOW").strip().upper()
@@ -82,28 +143,25 @@ def build_pipeline_reasoning(
     else:
         sentence1 = f"The payment was allowed after evaluating a fraud risk score of {score_pct}%."
 
-    model_signals = _dedupe_text(shap_reasons, limit=2)
-    behavior_signals = _dedupe_text(behavior_reasons, limit=1)
-    graph_signals = _dedupe_text(graph_reasons, limit=1)
+    top_reasons = _top_reason_snippets(
+        shap_reasons=shap_reasons,
+        behavior_reasons=behavior_reasons,
+        graph_reasons=graph_reasons,
+        rule_reasons=rule_reasons,
+        limit=3,
+    )
 
-    signal_parts: list[str] = []
-    if model_signals:
-        signal_parts.append(f"model features such as {', '.join(model_signals)}")
-    if behavior_signals:
-        signal_parts.append(f"behavioral signals such as {', '.join(behavior_signals)}")
-    if graph_signals:
-        signal_parts.append(f"graph-network signals such as {', '.join(graph_signals)}")
-
-    if signal_parts:
-        sentence2 = "Key contributing indicators include " + "; ".join(signal_parts) + "."
+    if top_reasons:
+        sentence2 = "Top reasons: " + "; ".join(top_reasons[:3]) + "."
     else:
-        sentence2 = "No dominant model, behavioral, or graph anomalies were observed."
+        sentence2 = "No strong risk signals were found across rules, behavior, or network checks."
 
     sentences = [sentence1, sentence2]
 
-    rule_signals = _dedupe_text(rule_reasons, limit=2)
-    if rule_signals:
-        sentences.append("Rule safeguards also triggered: " + ", ".join(rule_signals) + ".")
+    if decision_norm in {"VERIFY", "STEP-UP"}:
+        sentences.append("User verification was requested before payment completion.")
+    elif decision_norm == "BLOCK":
+        sentences.append("The payment can be retried after confirming beneficiary and device details.")
 
     return sentences[:3]
 
@@ -160,9 +218,9 @@ def generate_summary(txn: dict, audit: dict = None) -> str:
         rule_reasons=[],
     )
 
-    # Keep transaction-specific first sentence and add 1-2 reasoning sentences.
-    tail = narrative[1:] if len(narrative) > 1 else ["No dominant risk indicators were identified."]
-    return " ".join([sentence1, *tail[:2]])
+    # Keep transaction-specific first sentence and add one concise reasoning sentence.
+    tail = narrative[1:2] if len(narrative) > 1 else ["No dominant risk indicators were identified."]
+    return " ".join([sentence1, *tail])
 
 
 @router.post("/summary", summary="Generate natural language investigation summary",

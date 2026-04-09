@@ -48,3 +48,38 @@ body {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+@keyframes modalFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-modal-fade-in {
+  animation: modalFadeIn 160ms ease-out;
+}
+
+.animate-modal-slide-in {
+  animation: modalSlideIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-modal-fade-in,
+  .animate-modal-slide-in {
+    animation: none;
+  }
+}

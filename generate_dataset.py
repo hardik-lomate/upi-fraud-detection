@@ -43,13 +43,14 @@ FRAUD_PATTERNS = [
     "blended_low_signal_fraud",
 ]
 
-FRAUD_PATTERN_WEIGHTS = [0.18, 0.17, 0.16, 0.17, 0.14, 0.14, 0.04]
+FRAUD_PATTERN_WEIGHTS = [0.17, 0.16, 0.15, 0.16, 0.13, 0.14, 0.09]
 
 NORMAL_EDGE_PATTERNS = [
     "normal_high_amount_known_device",
     "normal_night_low_amount",
     "normal_new_device_low_value",
     "normal_velocity_burst_known_context",
+    "normal_travel_spike_small_amount",
 ]
 
 TXN_TYPES = ["purchase", "transfer", "bill_payment", "recharge"]
@@ -136,7 +137,7 @@ def generate_dataset(
         severity = "baseline"
         if label == 1:
             pattern = str(rng.choice(FRAUD_PATTERNS, p=FRAUD_PATTERN_WEIGHTS))
-            severity = "moderate" if rng.random() < 0.28 else "severe"
+            severity = "moderate" if rng.random() < 0.36 else "severe"
 
         transaction_velocity = int(max(1, rng.poisson(profile["base_velocity"] + 0.2)))
         failed_attempts = int(max(0, rng.poisson(0.6)))
@@ -251,20 +252,20 @@ def generate_dataset(
             elif pattern == "blended_low_signal_fraud":
                 # Intentional low-to-moderate fraud profile to create realistic overlap.
                 profile_type = "fraud_borderline"
-                amount = float(avg_amount * rng.uniform(2.1, 3.3))
-                transaction_velocity = max(transaction_velocity, int(rng.integers(4, 12)))
-                failed_attempts += int(rng.integers(2, 9))
-                is_new_device = int(rng.random() < 0.35)
+                amount = float(avg_amount * rng.uniform(1.6, 2.9))
+                transaction_velocity = max(transaction_velocity, int(rng.integers(3, 10)))
+                failed_attempts += int(rng.integers(1, 7))
+                is_new_device = int(rng.random() < 0.30)
                 if is_new_device:
                     device_id = f"DEV_BLEND_{idx:06d}"
-                if rng.random() < 0.35:
+                if rng.random() < 0.28:
                     suspicious_hour = int(rng.choice([1, 2, 3, 4, 23]))
                     ts = ts.replace(hour=suspicious_hour, minute=int(rng.integers(0, 60)))
-                merchant_risk = max(merchant_risk, float(rng.uniform(0.40, 0.72)))
-                graph_risk = max(graph_risk, float(rng.uniform(0.45, 0.76)))
+                merchant_risk = max(merchant_risk, float(rng.uniform(0.36, 0.68)))
+                graph_risk = max(graph_risk, float(rng.uniform(0.40, 0.70)))
                 txn_type = str(rng.choice(["purchase", "transfer"], p=[0.40, 0.60]))
 
-        if label == 0 and rng.random() < 0.06:
+        if label == 0 and rng.random() < 0.10:
             edge_pattern = str(rng.choice(NORMAL_EDGE_PATTERNS))
             profile_type = f"normal_edge_{edge_pattern}"
 
@@ -304,12 +305,44 @@ def generate_dataset(
                 device_id = profile["primary_device"]
                 txn_type = str(rng.choice(["bill_payment", "transfer"], p=[0.65, 0.35]))
 
+            elif edge_pattern == "normal_travel_spike_small_amount":
+                is_new_device = int(rng.random() < 0.45)
+                device_id = f"DEV_TRAVEL_{idx:06d}" if is_new_device else profile["secondary_device"]
+                city_name = CITIES[int(rng.integers(0, len(CITIES)))][0]
+                amount = float(avg_amount * rng.uniform(0.60, 1.45))
+                transaction_velocity = max(transaction_velocity, int(rng.integers(3, 9)))
+                failed_attempts = max(0, failed_attempts + int(rng.integers(0, 3)))
+                merchant_risk = max(merchant_risk, float(rng.uniform(0.22, 0.54)))
+                graph_risk = max(graph_risk, float(rng.uniform(0.20, 0.52)))
+                txn_type = str(rng.choice(["purchase", "transfer", "bill_payment"], p=[0.45, 0.20, 0.35]))
+
+        # Introduce overlap by softening a fraction of fraud and elevating a fraction of normal cases.
+        if label == 1 and rng.random() < 0.18:
+            amount *= float(rng.uniform(0.72, 0.92))
+            transaction_velocity = max(1, int(round(transaction_velocity * rng.uniform(0.68, 0.90))))
+            failed_attempts = max(0, failed_attempts - int(rng.integers(0, 3)))
+            merchant_risk = max(0.24, merchant_risk * float(rng.uniform(0.70, 0.90)))
+            graph_risk = max(0.26, graph_risk * float(rng.uniform(0.72, 0.90)))
+            profile_type = "fraud_borderline_overlap"
+
+        if label == 0 and rng.random() < 0.14:
+            amount *= float(rng.uniform(1.05, 1.45))
+            transaction_velocity = max(transaction_velocity, int(rng.integers(4, 11)))
+            failed_attempts = max(0, failed_attempts + int(rng.integers(1, 4)))
+            merchant_risk = max(merchant_risk, float(rng.uniform(0.24, 0.58)))
+            graph_risk = max(graph_risk, float(rng.uniform(0.22, 0.56)))
+            if rng.random() < 0.20:
+                is_new_device = 1
+                device_id = f"DEV_EDGE_{idx:06d}"
+            if profile_type == "standard":
+                profile_type = "normal_soft_anomaly"
+
         # Inject slight noise for realistic overlap between classes.
-        amount *= float(rng.normal(1.0, 0.04 if label == 1 else 0.03))
-        transaction_velocity = int(max(1, round(transaction_velocity + rng.normal(0.0, 0.9))))
-        failed_attempts = int(max(0, round(failed_attempts + rng.normal(0.0, 0.7))))
-        merchant_risk = _clip01(float(merchant_risk + rng.normal(0.0, 0.025)))
-        graph_risk = _clip01(float(graph_risk + rng.normal(0.0, 0.03)))
+        amount *= float(rng.normal(1.0, 0.05 if label == 1 else 0.04))
+        transaction_velocity = int(max(1, round(transaction_velocity + rng.normal(0.0, 1.1))))
+        failed_attempts = int(max(0, round(failed_attempts + rng.normal(0.0, 0.85))))
+        merchant_risk = _clip01(float(merchant_risk + rng.normal(0.0, 0.032)))
+        graph_risk = _clip01(float(graph_risk + rng.normal(0.0, 0.036)))
 
         if label == 0 and rng.random() < 0.90:
             hour = int(rng.integers(7, 22))
@@ -334,11 +367,11 @@ def generate_dataset(
         )
 
         if label == 1:
-            behavior_score = _clip01(behavior_base + float(rng.normal(0.12, 0.08)))
+            behavior_score = _clip01(behavior_base + float(rng.normal(0.09, 0.10)))
             if pattern == "blended_low_signal_fraud":
                 behavior_score = _clip01(behavior_score - float(rng.uniform(0.08, 0.18)))
         else:
-            behavior_score = _clip01(behavior_base + float(rng.normal(-0.03, 0.06)))
+            behavior_score = _clip01(behavior_base + float(rng.normal(-0.01, 0.08)))
             if profile_type.startswith("normal_edge"):
                 behavior_score = _clip01(behavior_score + float(rng.uniform(0.04, 0.16)))
 

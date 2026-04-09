@@ -5,7 +5,30 @@ import DecisionBadge from '../components/dashboard/DecisionBadge';
 import RiskBadge from '../components/dashboard/RiskBadge';
 import { formatCurrency, formatDateTime } from '../utils/formatters';
 
-function TransactionsPage({ transactions, loading, error, filter, onFilterChange, onSelectTransaction }) {
+function decisionRowTone(decision, highlighted) {
+  const normalized = String(decision || '').toUpperCase();
+  const isStepUp = normalized === 'STEP-UP' || normalized === 'VERIFY';
+
+  if (highlighted) {
+    return 'ring-1 ring-cyan-300/60 bg-cyan-500/10 hover:bg-cyan-500/15';
+  }
+  if (normalized === 'BLOCK') {
+    return 'bg-rose-500/10 hover:bg-rose-500/15';
+  }
+  if (isStepUp) {
+    return 'bg-amber-500/10 hover:bg-amber-500/15';
+  }
+  return 'hover:bg-emerald-500/10';
+}
+
+function riskFillClass(riskScore) {
+  const score = Number(riskScore || 0);
+  if (score > 0.6) return 'bg-rose-400';
+  if (score >= 0.3) return 'bg-amber-400';
+  return 'bg-emerald-400';
+}
+
+function TransactionsPage({ transactions, loading, error, filter, onFilterChange, onSelectTransaction, highlightedTransactionId }) {
   const [search, setSearch] = useState('');
 
   const filtered = useMemo(() => {
@@ -66,7 +89,12 @@ function TransactionsPage({ transactions, loading, error, filter, onFilterChange
 
       <div className="grid gap-4 lg:grid-cols-2">
         {filtered.slice(0, 24).map((txn) => (
-          <TransactionCard key={txn.transaction_id} transaction={txn} onClick={onSelectTransaction} />
+          <TransactionCard
+            key={txn.transaction_id}
+            transaction={txn}
+            highlighted={txn.transaction_id === highlightedTransactionId}
+            onClick={onSelectTransaction}
+          />
         ))}
       </div>
 
@@ -88,20 +116,40 @@ function TransactionsPage({ transactions, loading, error, filter, onFilterChange
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((txn) => (
+                {filtered.map((txn) => {
+                  const isHighlighted = txn.transaction_id === highlightedTransactionId;
+                  const riskPct = Math.max(4, Math.min(100, Number(txn.risk_score || 0) * 100));
+                  return (
                   <tr
                     key={txn.transaction_id}
-                    className="cursor-pointer border-b border-slate-800/70 text-slate-200 transition hover:bg-slate-800/60"
+                    className={`cursor-pointer border-b border-slate-800/70 text-slate-200 transition ${decisionRowTone(txn.decision, isHighlighted)}`}
                     onClick={() => onSelectTransaction(txn)}
                   >
-                    <td className="px-3 py-3 font-mono text-xs text-slate-300">{txn.transaction_id}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-slate-300">
+                      <div className="space-y-1">
+                        <div>{txn.transaction_id}</div>
+                        {isHighlighted ? (
+                          <span className="inline-flex items-center rounded-full border border-cyan-300/50 bg-cyan-500/15 px-2 py-0.5 text-[10px] font-semibold tracking-[0.12em] text-cyan-100">
+                            HIGHLIGHTED
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
                     <td className="px-3 py-3 text-xs text-slate-300">{txn.sender_upi}</td>
                     <td className="px-3 py-3">{formatCurrency(txn.amount)}</td>
-                    <td className="px-3 py-3"><RiskBadge risk={txn.risk_score} /></td>
+                    <td className="px-3 py-3">
+                      <div className="space-y-1.5">
+                        <RiskBadge risk={txn.risk_score} />
+                        <div className="h-1.5 w-28 overflow-hidden rounded-full bg-slate-800">
+                          <div className={`h-full ${riskFillClass(txn.risk_score)}`} style={{ width: `${riskPct}%` }} />
+                        </div>
+                      </div>
+                    </td>
                     <td className="px-3 py-3"><DecisionBadge decision={txn.decision} /></td>
                     <td className="px-3 py-3 text-xs text-slate-400">{formatDateTime(txn.timestamp)}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

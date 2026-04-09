@@ -192,6 +192,19 @@ def _apply_platt_scaling(y_proba: np.ndarray, calibrator: LogisticRegression, ep
   return calibrator.predict_proba(logits)[:, 1]
 
 
+def _inject_feature_noise(x_train: pd.DataFrame, seed: int = 42, std_scale: float = 0.012) -> pd.DataFrame:
+  """Add light Gaussian jitter to training features to reduce over-confidence."""
+  if x_train.empty:
+    return x_train
+
+  rng = np.random.default_rng(seed)
+  values = x_train.to_numpy(dtype=float)
+  per_feature_std = x_train.std(axis=0, ddof=0).replace(0.0, 1.0).to_numpy(dtype=float)
+  noise = rng.normal(loc=0.0, scale=std_scale, size=values.shape) * per_feature_std
+  jittered = np.clip(values + noise, 0.0, None)
+  return pd.DataFrame(jittered, columns=x_train.columns, index=x_train.index)
+
+
 def main() -> None:
   df = _require_dataset(DATASET_PATH)
   features, y = _to_contract_features(df)
@@ -212,27 +225,28 @@ def main() -> None:
     random_state=42,
     stratify=y_train,
   )
+  x_fit_noisy = _inject_feature_noise(x_fit, seed=42, std_scale=0.010)
 
   neg = int((y_fit == 0).sum())
   pos = int((y_fit == 1).sum())
   scale_pos_weight = float(neg / max(pos, 1))
 
   lgbm_model = LGBMClassifier(
-    n_estimators=440,
-    learning_rate=0.04,
-    max_depth=6,
-    num_leaves=38,
-    subsample=0.88,
-    colsample_bytree=0.84,
-    reg_alpha=0.12,
-    reg_lambda=0.28,
-    min_child_samples=28,
+    n_estimators=360,
+    learning_rate=0.03,
+    max_depth=4,
+    num_leaves=24,
+    subsample=0.84,
+    colsample_bytree=0.80,
+    reg_alpha=0.20,
+    reg_lambda=0.45,
+    min_child_samples=34,
     scale_pos_weight=scale_pos_weight,
     random_state=42,
     verbose=-1,
   )
   lgbm_model.fit(
-    x_fit,
+    x_fit_noisy,
     y_fit,
     eval_set=[(x_cal, y_cal)],
     eval_metric="binary_logloss",
@@ -240,15 +254,15 @@ def main() -> None:
   )
 
   xgb_model = XGBClassifier(
-    n_estimators=380,
-    learning_rate=0.04,
-    max_depth=5,
-    min_child_weight=3,
-    subsample=0.86,
-    colsample_bytree=0.82,
-    reg_alpha=0.10,
-    reg_lambda=1.10,
-    gamma=0.05,
+    n_estimators=320,
+    learning_rate=0.03,
+    max_depth=4,
+    min_child_weight=5,
+    subsample=0.82,
+    colsample_bytree=0.78,
+    reg_alpha=0.20,
+    reg_lambda=1.45,
+    gamma=0.14,
     scale_pos_weight=scale_pos_weight,
     eval_metric="aucpr",
     random_state=42,
@@ -256,7 +270,7 @@ def main() -> None:
   )
   try:
     xgb_model.fit(
-      x_fit,
+      x_fit_noisy,
       y_fit,
       eval_set=[(x_cal, y_cal)],
       verbose=False,
@@ -279,17 +293,17 @@ def main() -> None:
   y_proba_cal_raw = ensemble_weights["lightgbm"] * lgbm_proba_cal + ensemble_weights["xgboost"] * xgb_proba_cal
   y_proba_raw = ensemble_weights["lightgbm"] * lgbm_proba + ensemble_weights["xgboost"] * xgb_proba
 
-  calibrator = LogisticRegression(solver="lbfgs", C=1.10, max_iter=500, random_state=42)
+  calibrator = LogisticRegression(solver="lbfgs", C=0.75, max_iter=500, random_state=42)
   calibrator.fit(
     np.log(np.clip(y_proba_cal_raw, 1e-5, 1.0 - 1e-5) / (1.0 - np.clip(y_proba_cal_raw, 1e-5, 1.0 - 1e-5))).reshape(-1, 1),
     y_cal,
   )
 
   y_proba_calibrated = _apply_platt_scaling(y_proba_raw, calibrator=calibrator, eps=1e-5)
-  raw_weight = 0.65
+  raw_weight = 0.50
   y_proba_serving = np.clip((raw_weight * y_proba_raw) + ((1.0 - raw_weight) * y_proba_calibrated), 0.0, 1.0)
   base_rate = float(y_train.mean())
-  prior_blend = 0.05
+  prior_blend = 0.08
   y_proba_serving = np.clip(((1.0 - prior_blend) * y_proba_serving) + (prior_blend * base_rate), 0.0, 1.0)
 
   # Evaluate discrimination quality on raw ensemble output while serving remains calibrated.
@@ -316,6 +330,9 @@ def main() -> None:
       "serving_p75": float(np.quantile(y_proba_serving, 0.75)),
       "serving_p95": float(np.quantile(y_proba_serving, 0.95)),
       "serving_max": float(np.max(y_proba_serving)),
+      "serving_fraud_p10": float(np.quantile(y_proba_serving[y_test.to_numpy() == 1], 0.10)) if int((y_test == 1).sum()) > 0 else 0.0,
+      "serving_fraud_p50": float(np.quantile(y_proba_serving[y_test.to_numpy() == 1], 0.50)) if int((y_test == 1).sum()) > 0 else 0.0,
+      "serving_fraud_p90": float(np.quantile(y_proba_serving[y_test.to_numpy() == 1], 0.90)) if int((y_test == 1).sum()) > 0 else 0.0,
       "serving_normal_mean": float(np.mean(y_proba_serving[y_test.to_numpy() == 0])) if int((y_test == 0).sum()) > 0 else 0.0,
       "serving_fraud_mean": float(np.mean(y_proba_serving[y_test.to_numpy() == 1])) if int((y_test == 1).sum()) > 0 else 0.0,
       "eval_min": float(np.min(y_proba_eval)),

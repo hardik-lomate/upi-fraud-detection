@@ -37,7 +37,30 @@ function buildRiskBins(transactions) {
   return bins.map((bin) => ({ range: bin.label, count: bin.count }));
 }
 
-function DashboardPage({ transactions, metrics, loading, error, onSelectTransaction, onRefresh }) {
+function decisionRowTone(decision, highlighted) {
+  const normalized = String(decision || '').toUpperCase();
+  const isStepUp = normalized === 'STEP-UP' || normalized === 'VERIFY';
+
+  if (highlighted) {
+    return 'ring-1 ring-cyan-300/60 bg-cyan-500/10 hover:bg-cyan-500/15';
+  }
+  if (normalized === 'BLOCK') {
+    return 'bg-rose-500/10 hover:bg-rose-500/15';
+  }
+  if (isStepUp) {
+    return 'bg-amber-500/10 hover:bg-amber-500/15';
+  }
+  return 'hover:bg-emerald-500/10';
+}
+
+function riskFillClass(riskScore) {
+  const score = Number(riskScore || 0);
+  if (score > 0.6) return 'bg-rose-400';
+  if (score >= 0.3) return 'bg-amber-400';
+  return 'bg-emerald-400';
+}
+
+function DashboardPage({ transactions, metrics, loading, error, onSelectTransaction, onRefresh, highlightedTransactionId }) {
   const summary = useMemo(() => {
     const total = transactions.length;
     const blocked = transactions.filter((txn) => txn.decision === 'BLOCK').length;
@@ -66,7 +89,15 @@ function DashboardPage({ transactions, metrics, loading, error, onSelectTransact
     [summary]
   );
 
-  const recentRows = useMemo(() => transactions.slice(0, 8), [transactions]);
+  const recentRows = useMemo(() => {
+    const base = transactions.slice(0, 8);
+    if (!highlightedTransactionId) return base;
+
+    const highlighted = transactions.find((txn) => txn.transaction_id === highlightedTransactionId);
+    if (!highlighted) return base;
+
+    return [highlighted, ...base.filter((txn) => txn.transaction_id !== highlightedTransactionId)].slice(0, 8);
+  }, [transactions, highlightedTransactionId]);
 
   return (
     <div className="space-y-6">
@@ -177,19 +208,39 @@ function DashboardPage({ transactions, metrics, loading, error, onSelectTransact
                 </tr>
               </thead>
               <tbody>
-                {recentRows.map((txn) => (
+                {recentRows.map((txn) => {
+                  const isHighlighted = txn.transaction_id === highlightedTransactionId;
+                  const riskPct = Math.max(4, Math.min(100, Number(txn.risk_score || 0) * 100));
+                  return (
                   <tr
                     key={txn.transaction_id}
-                    className="cursor-pointer border-b border-slate-800/80 text-slate-200 transition hover:bg-slate-800/55"
+                    className={`cursor-pointer border-b border-slate-800/80 text-slate-200 transition ${decisionRowTone(txn.decision, isHighlighted)}`}
                     onClick={() => onSelectTransaction(txn)}
                   >
-                    <td className="px-3 py-3 font-mono text-xs text-slate-300">{txn.transaction_id}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-slate-300">
+                      <div className="space-y-1">
+                        <div>{txn.transaction_id}</div>
+                        {isHighlighted ? (
+                          <span className="inline-flex items-center rounded-full border border-cyan-300/50 bg-cyan-500/15 px-2 py-0.5 text-[10px] font-semibold tracking-[0.12em] text-cyan-100">
+                            HIGHLIGHTED
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
                     <td className="px-3 py-3">{formatCurrency(txn.amount)}</td>
-                    <td className="px-3 py-3"><RiskBadge risk={txn.risk_score} /></td>
+                    <td className="px-3 py-3">
+                      <div className="space-y-1.5">
+                        <RiskBadge risk={txn.risk_score} />
+                        <div className="h-1.5 w-28 overflow-hidden rounded-full bg-slate-800">
+                          <div className={`h-full ${riskFillClass(txn.risk_score)}`} style={{ width: `${riskPct}%` }} />
+                        </div>
+                      </div>
+                    </td>
                     <td className="px-3 py-3"><DecisionBadge decision={txn.decision} /></td>
                     <td className="px-3 py-3 text-xs text-slate-400">{formatDateTime(txn.timestamp)}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

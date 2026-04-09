@@ -40,6 +40,7 @@ function NavTab({ to, label }) {
 function App() {
   const [transactions, setTransactions] = useState([]);
   const [metrics, setMetrics] = useState(null);
+  const [highlightedTransactionId, setHighlightedTransactionId] = useState('');
 
   const [loadingTransactions, setLoadingTransactions] = useState(true);
   const [loadingMetrics, setLoadingMetrics] = useState(true);
@@ -115,6 +116,9 @@ function App() {
   }, [loadTransactions, loadMetrics]);
 
   const handleOpenTransaction = useCallback(async (transaction) => {
+    if (transaction?.transaction_id) {
+      setHighlightedTransactionId(transaction.transaction_id);
+    }
     setDetailOpen(true);
     setDetailLoading(true);
     setDetailError('');
@@ -135,19 +139,41 @@ function App() {
   const handleRunSimulation = useCallback(async () => {
     setSimulationLoading(true);
     setTransactionsError('');
+    pushMessage('Running simulation...');
 
     try {
       const result = await runSimulation();
       const rows = Array.isArray(result?.transactions) ? result.transactions : [];
-      setTransactions((prev) => mergeLatestTransactions(prev, rows, 260));
-      pushMessage(`Simulation complete: ${rows.length} transactions from ${result?.source || 'fallback'}.`);
+      const merged = mergeLatestTransactions(transactions, rows, 260);
+      setTransactions(merged);
+      const topRiskRow = [...rows].sort((a, b) => Number(b.risk_score || 0) - Number(a.risk_score || 0))[0];
+      const topRiskMerged = [...merged].sort((a, b) => Number(b.risk_score || 0) - Number(a.risk_score || 0))[0];
+
+      const fraudCandidate =
+        rows.find((txn) => txn.decision === 'BLOCK')
+        || rows.find((txn) => txn.decision === 'STEP-UP')
+        || rows.find((txn) => Number(txn.risk_score || 0) >= 0.6)
+        || merged.find((txn) => txn.decision === 'BLOCK')
+        || merged.find((txn) => txn.decision === 'STEP-UP')
+        || topRiskRow
+        || topRiskMerged;
+
+      if (fraudCandidate?.transaction_id) {
+        setHighlightedTransactionId(fraudCandidate.transaction_id);
+        void handleOpenTransaction(fraudCandidate);
+        pushMessage(
+          `Simulation complete: ${rows.length} transactions from ${result?.source || 'fallback'}. Highlighted high-risk case ${fraudCandidate.transaction_id}.`
+        );
+      } else {
+        pushMessage(`Simulation complete: ${rows.length} transactions from ${result?.source || 'fallback'}.`);
+      }
     } catch (error) {
       const fallback = String(error?.response?.data?.detail || error?.message || 'Simulation failed.');
       setTransactionsError(fallback);
     } finally {
       setSimulationLoading(false);
     }
-  }, [pushMessage]);
+  }, [handleOpenTransaction, pushMessage, transactions]);
 
   const headlineStats = useMemo(() => {
     const total = transactions.length;
@@ -196,10 +222,10 @@ function App() {
                   type="button"
                   disabled={simulationLoading}
                   onClick={handleRunSimulation}
-                  className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/50 bg-emerald-500/15 px-3 py-2 text-sm font-semibold text-emerald-200 transition hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-xl border border-emerald-300/70 bg-gradient-to-r from-emerald-500/25 to-cyan-500/20 px-4 py-2.5 text-sm font-semibold text-emerald-100 shadow-[0_10px_24px_rgba(16,185,129,0.2)] transition hover:border-emerald-200 hover:from-emerald-500/35 hover:to-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Zap className="h-4 w-4" />
-                  {simulationLoading ? 'Running...' : 'Simulate Attack'}
+                  {simulationLoading ? 'Running Simulation...' : 'Run Simulation'}
                 </button>
               </div>
             </div>
@@ -261,6 +287,7 @@ function App() {
                     error={transactionsError}
                     onSelectTransaction={handleOpenTransaction}
                     onRefresh={handleRefresh}
+                    highlightedTransactionId={highlightedTransactionId}
                   />
                 }
               />
@@ -274,6 +301,7 @@ function App() {
                     filter={decisionFilter}
                     onFilterChange={setDecisionFilter}
                     onSelectTransaction={handleOpenTransaction}
+                    highlightedTransactionId={highlightedTransactionId}
                   />
                 }
               />

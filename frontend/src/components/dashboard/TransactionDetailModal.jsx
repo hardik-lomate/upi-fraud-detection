@@ -26,8 +26,8 @@ function TransactionDetailModal({ open, transaction, loading, error, onClose }) 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
-      <div className="max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-3xl border border-slate-700/70 bg-slate-900 shadow-2xl">
+    <div className="animate-modal-fade-in fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+      <div className="animate-modal-slide-in max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-3xl border border-slate-700/70 bg-slate-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-700/60 px-5 py-4">
           <div>
             <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Transaction Detail</p>
