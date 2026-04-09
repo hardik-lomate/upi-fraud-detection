@@ -581,27 +581,11 @@ def _bg_audit(txn_id, sender, receiver, amount, fraud_score, decision, risk_leve
 # Core Endpoints
 # =============================================
 
-@app.get("/", summary="Service status and quick start")
-async def home():
+@app.get("/")
+def home():
     return {
-        "status": "API running",
-        "message": "UPI Fraud Detection API is live",
-        "version": MODEL_VERSION,
-        "docs": "/docs",
-        "health": "/health",
-        "quickstart": {
-            "predict": {
-                "method": "POST",
-                "path": "/predict",
-                "required_json_fields": ["sender_upi", "receiver_upi", "amount"],
-                "sample_request": {
-                    "sender_upi": "alice@upi",
-                    "receiver_upi": "merchant@upi",
-                    "amount": 15000,
-                    "transaction_type": "transfer",
-                },
-            }
-        },
+        "message": "UPI Fraud Detection API running",
+        "docs": "/health and /predict"
     }
 
 

@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
 COPY feature_contract.py .
 COPY ml/ ./ml/
+COPY model/ ./model/
 COPY monitoring/ ./monitoring/
 
 # Create default api_keys.json (auth.py falls back to built-in dev keys)
