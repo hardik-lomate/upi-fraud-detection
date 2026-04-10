@@ -444,9 +444,31 @@ def step_decide(ctx: PipelineContext) -> PipelineContext:
     )
 
     if ctx.decision_mode == "bank":
+        has_rule_block = ctx.rule_decision == "BLOCK" or any(
+            getattr(r, "action", None) == "BLOCK" for r in (ctx.rules_triggered or [])
+        )
+        has_rule_flag = ctx.rule_decision == "FLAG" or any(
+            getattr(r, "action", None) == "FLAG" for r in (ctx.rules_triggered or [])
+        )
+
         bank_score = float(ctx.bank_risk_score or ctx.fraud_score or 0.0)
-        ctx.bank_decision, ctx.risk_level, ctx.message = make_bank_decision(bank_score)
-        ctx.decision = ctx.bank_decision
+        bank_decision, risk_level, message = make_bank_decision(bank_score)
+
+        # Rule layer must remain authoritative in bank mode too.
+        if has_rule_block:
+            bank_decision = "BLOCK"
+            risk_level = "HIGH"
+            message = "Blocked for safety."
+            bank_score = max(bank_score, 0.9)
+        elif has_rule_flag and bank_decision == "ALLOW":
+            bank_decision = "STEP-UP"
+            risk_level = "MEDIUM" if bank_score < 0.75 else "HIGH"
+            message = "Verification required."
+
+        ctx.bank_decision = bank_decision
+        ctx.risk_level = risk_level
+        ctx.message = message
+        ctx.decision = bank_decision
         ctx.risk_score = bank_score
         ctx.risk_tier = get_risk_tier(ctx.risk_score)
 

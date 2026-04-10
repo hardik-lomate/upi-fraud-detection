@@ -277,7 +277,7 @@ function simulationPayloads() {
     },
     {
       sender_upi: 'f4.demo@upi',
-      receiver_upi: 'mule.collector.demo@upi',
+      receiver_upi: 'f4.demo@upi',
       amount: 91000,
       transaction_type: 'transfer',
       timestamp: ts(-1),
@@ -315,7 +315,10 @@ function simulationPayloads() {
       sender_location_lat: 12.9716,
       sender_location_lon: 77.5946,
     },
-  ];
+  ].map((payload, idx) => ({
+    transaction_id: payload.transaction_id || `SIM_${String(idx + 1).padStart(3, '0')}`,
+    ...payload,
+  }));
 }
 
 export async function runSimulation() {

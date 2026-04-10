@@ -144,19 +144,19 @@ function App() {
     try {
       const result = await runSimulation();
       const rows = Array.isArray(result?.transactions) ? result.transactions : [];
-      const merged = mergeLatestTransactions(transactions, rows, 260);
-      setTransactions(merged);
+      const latest = mergeLatestTransactions([], rows, 260);
+      setTransactions(latest);
       const topRiskRow = [...rows].sort((a, b) => Number(b.risk_score || 0) - Number(a.risk_score || 0))[0];
-      const topRiskMerged = [...merged].sort((a, b) => Number(b.risk_score || 0) - Number(a.risk_score || 0))[0];
+      const topRiskLatest = [...latest].sort((a, b) => Number(b.risk_score || 0) - Number(a.risk_score || 0))[0];
 
       const fraudCandidate =
         rows.find((txn) => txn.decision === 'BLOCK')
         || rows.find((txn) => txn.decision === 'STEP-UP')
         || rows.find((txn) => Number(txn.risk_score || 0) >= 0.6)
-        || merged.find((txn) => txn.decision === 'BLOCK')
-        || merged.find((txn) => txn.decision === 'STEP-UP')
+        || latest.find((txn) => txn.decision === 'BLOCK')
+        || latest.find((txn) => txn.decision === 'STEP-UP')
         || topRiskRow
-        || topRiskMerged;
+        || topRiskLatest;
 
       if (fraudCandidate?.transaction_id) {
         setHighlightedTransactionId(fraudCandidate.transaction_id);
@@ -173,7 +173,7 @@ function App() {
     } finally {
       setSimulationLoading(false);
     }
-  }, [handleOpenTransaction, pushMessage, transactions]);
+  }, [handleOpenTransaction, pushMessage]);
 
   const headlineStats = useMemo(() => {
     const total = transactions.length;
