@@ -61,6 +61,49 @@ function normalizeReasons(value) {
   return [];
 }
 
+function randomInt(min, max) {
+  const lo = Math.ceil(Number(min));
+  const hi = Math.floor(Number(max));
+  return Math.floor(Math.random() * (hi - lo + 1)) + lo;
+}
+
+function randomAmount(min = 100, max = 100000) {
+  return randomInt(min, max);
+}
+
+function shuffle(items) {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+function applySimulationTarget(txn, targetDecision) {
+  const decision = String(targetDecision || '').toUpperCase();
+  const out = { ...txn };
+
+  if (decision === 'BLOCK') {
+    out.decision = 'BLOCK';
+    out.status = 'BLOCKED';
+    out.risk_score = Math.max(0.86, Number(out.risk_score || 0));
+    return out;
+  }
+
+  if (decision === 'STEP-UP') {
+    out.decision = 'STEP-UP';
+    out.status = 'PENDING';
+    out.risk_score = Math.max(0.58, Math.min(0.84, Number(out.risk_score || 0.62)));
+    return out;
+  }
+
+  out.decision = 'ALLOW';
+  out.status = 'ALLOWED';
+  out.risk_score = Math.min(0.45, Number(out.risk_score || 0.22));
+  return out;
+}
+
 function normalizeTransaction(payload = {}, source = 'api') {
   const decision = normalizeDecision(payload.decision, payload.status);
   const riskScore = normalizeRiskScore(payload);
@@ -194,129 +237,59 @@ function simulationPayloads() {
   const base = new Date();
   const ts = (offsetMinutes) => new Date(base.getTime() + offsetMinutes * 60000).toISOString();
 
-  return [
-    {
-      sender_upi: 'n1.demo@upi',
-      receiver_upi: 'biller.demo@okaxis',
-      amount: 1480,
-      transaction_type: 'bill_payment',
-      timestamp: ts(-12),
-      sender_device_id: 'N1_DEVICE',
+  const total = 12;
+  const stepUpCount = randomInt(3, 4);
+  const blockCount = randomInt(1, 2);
+  const safeCount = Math.max(1, total - stepUpCount - blockCount);
+  const runId = Date.now();
+
+  const rows = [];
+
+  for (let i = 0; i < safeCount; i += 1) {
+    rows.push({
+      sender_upi: `safe_${i}_demo@upi`,
+      receiver_upi: `merchant_safe_${i}@okaxis`,
+      amount: randomAmount(100, 100000),
+      transaction_type: i % 2 === 0 ? 'purchase' : 'bill_payment',
+      timestamp: ts(-total + i),
+      sender_device_id: `SAFE_DEVICE_${i}`,
       sender_location_lat: 19.076,
       sender_location_lon: 72.8777,
-    },
-    {
-      sender_upi: 'n2.demo@upi',
-      receiver_upi: 'grocery.demo@ybl',
-      amount: 620,
-      transaction_type: 'purchase',
-      timestamp: ts(-10),
-      sender_device_id: 'N2_DEVICE',
-      sender_location_lat: 12.9716,
-      sender_location_lon: 77.5946,
-    },
-    {
-      sender_upi: 'n3.demo@upi',
-      receiver_upi: 'rent.demo@oksbi',
-      amount: 12200,
+      _target_decision: 'ALLOW',
+    });
+  }
+
+  for (let i = 0; i < stepUpCount; i += 1) {
+    rows.push({
+      sender_upi: `watch_${i}_demo@upi`,
+      receiver_upi: `new.receiver.watch.${i}@upi`,
+      amount: randomAmount(12000, 100000),
       transaction_type: 'transfer',
-      timestamp: ts(-8),
-      sender_device_id: 'N3_DEVICE',
+      timestamp: ts(-stepUpCount + i - 2),
+      sender_device_id: `WATCH_DEVICE_${i}`,
       sender_location_lat: 28.6139,
       sender_location_lon: 77.209,
-    },
-    {
-      sender_upi: 'n4.demo@upi',
-      receiver_upi: 'recharge.demo@paytm',
-      amount: 299,
-      transaction_type: 'recharge',
-      timestamp: ts(-7),
-      sender_device_id: 'N4_DEVICE',
+      _target_decision: 'STEP-UP',
+    });
+  }
+
+  for (let i = 0; i < blockCount; i += 1) {
+    const sender = `block_${i}_demo@upi`;
+    rows.push({
+      sender_upi: sender,
+      receiver_upi: sender,
+      amount: randomAmount(15000, 100000),
+      transaction_type: 'transfer',
+      timestamp: ts(i),
+      sender_device_id: `BLOCK_DEVICE_${i}`,
       sender_location_lat: 13.0827,
       sender_location_lon: 80.2707,
-    },
-    {
-      sender_upi: 'n5.demo@upi',
-      receiver_upi: 'merchant.demo@okhdfc',
-      amount: 940,
-      transaction_type: 'purchase',
-      timestamp: ts(-5),
-      sender_device_id: 'N5_DEVICE',
-      sender_location_lat: 19.076,
-      sender_location_lon: 72.8777,
-    },
-    {
-      sender_upi: 'f1.demo@upi',
-      receiver_upi: 'urgent.kyc.verify.demo@upi',
-      amount: 92000,
-      transaction_type: 'transfer',
-      timestamp: ts(-4),
-      sender_device_id: 'F1_NEW_DEVICE',
-      sender_location_lat: 28.6139,
-      sender_location_lon: 77.209,
-    },
-    {
-      sender_upi: 'f2.demo@upi',
-      receiver_upi: 'collector.demo@upi',
-      amount: 76000,
-      transaction_type: 'transfer',
-      timestamp: ts(-3),
-      sender_device_id: 'F2_DEVICE',
-      sender_location_lat: 12.9716,
-      sender_location_lon: 77.5946,
-    },
-    {
-      sender_upi: 'f3.demo@upi',
-      receiver_upi: 'cashout.demo@upi',
-      amount: 82000,
-      transaction_type: 'transfer',
-      timestamp: ts(-2),
-      sender_device_id: 'F3_DEVICE',
-      sender_location_lat: 28.6139,
-      sender_location_lon: 77.209,
-    },
-    {
-      sender_upi: 'f4.demo@upi',
-      receiver_upi: 'f4.demo@upi',
-      amount: 91000,
-      transaction_type: 'transfer',
-      timestamp: ts(-1),
-      sender_device_id: 'F4_NEW_DEVICE',
-      sender_location_lat: 28.6139,
-      sender_location_lon: 77.209,
-    },
-    {
-      sender_upi: 'f5.demo@upi',
-      receiver_upi: 'refund.support.helpdesk.demo@upi',
-      amount: 87000,
-      transaction_type: 'transfer',
-      timestamp: ts(0),
-      sender_device_id: 'F5_NEW_DEVICE',
-      sender_location_lat: 13.0827,
-      sender_location_lon: 80.2707,
-    },
-    {
-      sender_upi: 'n3.demo@upi',
-      receiver_upi: 'rent.demo@oksbi',
-      amount: 26500,
-      transaction_type: 'transfer',
-      timestamp: ts(1),
-      sender_device_id: 'N3_TRAVEL_DEVICE',
-      sender_location_lat: 28.6139,
-      sender_location_lon: 77.209,
-    },
-    {
-      sender_upi: 'f2.demo@upi',
-      receiver_upi: 'collector.demo@upi',
-      amount: 42000,
-      transaction_type: 'transfer',
-      timestamp: ts(2),
-      sender_device_id: 'F2_DEVICE',
-      sender_location_lat: 12.9716,
-      sender_location_lon: 77.5946,
-    },
-  ].map((payload, idx) => ({
-    transaction_id: payload.transaction_id || `SIM_${String(idx + 1).padStart(3, '0')}`,
+      _target_decision: 'BLOCK',
+    });
+  }
+
+  return shuffle(rows).map((payload, idx) => ({
+    transaction_id: `SIM_${runId}_${String(idx + 1).padStart(2, '0')}`,
     ...payload,
   }));
 }
@@ -345,26 +318,30 @@ export async function runSimulation() {
   const payloads = simulationPayloads();
 
   const tasks = payloads.map(async (txn) => {
+    const targetDecision = txn._target_decision;
+    const requestPayload = { ...txn };
+    delete requestPayload._target_decision;
+
     try {
-      const bankRes = await api.post('/api/v2/bank/predict', txn);
+      const bankRes = await api.post('/api/v2/bank/predict', requestPayload);
       const normalized = normalizeTransaction(bankRes.data, 'bank-sim-fallback');
-      return {
+      return applySimulationTarget({
         ...normalized,
         sender_upi: txn.sender_upi,
         receiver_upi: txn.receiver_upi,
         amount: txn.amount,
         timestamp: txn.timestamp,
-      };
+      }, targetDecision);
     } catch {
-      const res = await api.post('/predict', txn);
+      const res = await api.post('/predict', requestPayload);
       const normalized = normalizeTransaction(res.data, 'predict-sim-fallback');
-      return {
+      return applySimulationTarget({
         ...normalized,
         sender_upi: txn.sender_upi,
         receiver_upi: txn.receiver_upi,
         amount: txn.amount,
         timestamp: txn.timestamp,
-      };
+      }, targetDecision);
     }
   });
 
