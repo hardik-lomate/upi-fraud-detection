@@ -108,12 +108,22 @@ def _resolve_cors_origins() -> list[str]:
     frontend_url = str(os.getenv("FRONTEND_URL", "")).strip()
     if frontend_url:
         fallback.append(frontend_url)
-    fallback.append("http://localhost:3000")
-    return fallback
+    fallback.extend(["http://localhost:3000", "http://127.0.0.1:3000"])
+    return list(dict.fromkeys(fallback))
+
+
+def _resolve_cors_origin_regex() -> str:
+    raw = str(os.getenv("CORS_ORIGIN_REGEX", "")).strip()
+    if raw:
+        return raw
+
+    # Allow common hosted frontend preview domains when explicit CORS_ORIGINS is not set.
+    return r"^https://.*\.(vercel\.app|netlify\.app)$"
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_resolve_cors_origins(),
+    allow_origin_regex=_resolve_cors_origin_regex(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
